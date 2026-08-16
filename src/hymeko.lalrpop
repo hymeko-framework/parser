@@ -1,0 +1,376 @@
+// src/hymeko.lalrpop
+use crate::ast::*;
+use crate::lexer::Token;
+use std::borrow::Cow;
+
+
+grammar<'a>;
+
+extern {
+    type Location = usize;
+    type Error = crate::lexer::LexError;
+
+    enum Token<'a> {
+        "{" => crate::lexer::Token::LBrace,
+        "}" => crate::lexer::Token::RBrace,
+        "(" => crate::lexer::Token::LParen,
+        ")" => crate::lexer::Token::RParen,
+        "[" => crate::lexer::Token::LBrack,
+        "]" => crate::lexer::Token::RBrack,
+        ":" => crate::lexer::Token::Colon,
+        "<" => crate::lexer::Token::LAngle,
+        ">" => crate::lexer::Token::RAngle,
+        "," => crate::lexer::Token::Comma,
+        ";" => crate::lexer::Token::Semi,
+        "." => crate::lexer::Token::Dot,
+        "@" => crate::lexer::Token::At,
+        "+" => crate::lexer::Token::Plus,
+        "-" => crate::lexer::Token::Minus,
+        "~" => crate::lexer::Token::Tilde,
+        "->" => crate::lexer::Token::Arrow,
+        "?" => crate::lexer::Token::Question,
+        "*" => crate::lexer::Token::Star,
+        ".." => crate::lexer::Token::DotDot,
+        "EOF" => crate::lexer::Token::EOF,
+
+        "using" => crate::lexer::Token::Using,
+        "as" => crate::lexer::Token::As,
+        "const" => crate::lexer::Token::Const,
+        "/" => crate::lexer::Token::Slash,
+        "=" => crate::lexer::Token::Equals,
+        Ident => crate::lexer::Token::Ident(<&'a str>),
+        Number => crate::lexer::Token::Number(<f64>),
+        StrLit => crate::lexer::Token::Str(<Cow<'a, str>>),
+    }
+}
+// ------------------------------------------------------------
+// Top-level
+// ------------------------------------------------------------
+
+
+
+pub Description: Description<'a, &'a str> = {
+    <name:Ident> <hb:OptHeaderBlock> <items:HyperItem*> => {
+        let (imports, usings, header, consts) = hb;
+        Description { name, header, imports, usings, consts, items }
+    }
+};
+
+OptHeaderBlock: HeaderBlock<'a> = {
+    "{" <xs:HeaderStmt*> "}" => {
+        let mut imports = Vec::new();
+        let mut usings = Vec::new();
+        let mut decls = Vec::new();
+        let mut consts = Vec::new();
+        for x in xs {
+            match x {
+                HeaderStmt::Import(i) => imports.push(i),
+                HeaderStmt::Using(u) => usings.push(u),
+                HeaderStmt::Node(n) => decls.push(n),
+                HeaderStmt::Const(c) => consts.push(c),
+            }
+        }
+        (imports, usings, decls, consts)
+    }
+};
+HeaderStmt: HeaderStmt<'a, &'a str> = {
+    <i:ImportStmt> => HeaderStmt::Import(i),
+    <u:UsingStmt> => HeaderStmt::Using(u),
+    <c:ConstStmt> => HeaderStmt::Const(c),
+    <n:HeaderItem> => HeaderStmt::Node(n),
+};
+
+ConstStmt: ConstDecl<&'a str> = {
+    "const" <name:Ident> "=" <value:NumExpr> ";" => ConstDecl { name, value }
+};
+
+HeaderItem: NodeDecl<'a, &'a str> = {
+    <name:Ident> <anno:OptAnno> ";" => NodeDecl {
+        anno,
+        inner: NodeInner { name, bases: Vec::new(), body: None }
+    }
+};
+
+ImportStmt: ImportStmt<'a, &'a str> = {
+    "@" <path:StrLit> <alias:OptImportAlias> ";" =>
+        ImportStmt { path, alias }
+};
+
+UsingStmt: UsingStmt<&'a str> = {
+    "using" <path:RefPath> "as" <alias:Ident> ";" =>
+        UsingStmt { path, alias }
+};
+
+OptImportAlias: Option<&'a str> = {
+    "->" <name:Ident> => Some(name),
+    => None,
+};
+
+HyperItem: HyperItem<'a, &'a str> = {
+    <n:NodeDecl>  => HyperItem::Node(n),
+    <e:EdgeDecl>  => HyperItem::Edge(e),
+    <a:HyperArc>  => HyperItem::Arc(a),
+};
+
+BaseRef: SignedRef<'a, &'a str> = {
+    <s: SignedRef> => s,
+
+    <pre:OptTags> <r:RefPath> <anno:OptAnno> => {
+        let mut anno = anno;
+        let mut tags = pre;
+        tags.extend(anno.tags);
+        anno.tags = tags;
+        SignedRef::Neutral(RefAtom { target: r, anno })
+
+    }
+};
+
+BaseRefs: Vec<SignedRef<'a, &'a str>> = {
+    <x:BaseRef> <rest:("," BaseRef)*> ","? => {
+        let mut out = vec![x];
+        for (_, y) in rest { out.push(y); }
+        out
+    }
+
+};
+
+// ------------------------------------------------------------
+// Values
+// ------------------------------------------------------------
+
+IdentList: Vec<&'a str> = {
+    <x:Ident> <rest:("," Ident)*> ","? => {
+        let mut out = vec![x];
+        for (_, y) in rest { out.push(y); }
+        out
+    }
+};
+
+Value: Value<'a, &'a str> = {
+    <s:StrLit> => Value::Str(s),
+    <n:Number> => Value::Num(n),
+    "-" <n:Number> => Value::Num(-n),
+    "[" <xs:ValueList> "]" => Value::List(xs),
+    <r:RefPath> => Value::Ref(r),
+    // Parenthesised numeric expression — Tier B. Bare const refs go via
+    // the RefPath arm above and are resolved at lowering time; only
+    // compound expressions need the explicit parens.
+    "(" <e:NumExpr> ")" => Value::Expr(e),
+};
+
+// ─── Compile-time numeric expressions (Tier B) ────────────────────────
+// Standard precedence: NumExpr → NumExprAdd → NumExprMul → NumExprUnary → NumExprAtom
+
+NumExpr: ConstExpr<&'a str> = {
+    NumExprAdd,
+};
+
+NumExprAdd: ConstExpr<&'a str> = {
+    <l:NumExprAdd> "+" <r:NumExprMul> =>
+        ConstExpr::Bin(BinOp::Add, Box::new(l), Box::new(r)),
+    <l:NumExprAdd> "-" <r:NumExprMul> =>
+        ConstExpr::Bin(BinOp::Sub, Box::new(l), Box::new(r)),
+    NumExprMul,
+};
+
+NumExprMul: ConstExpr<&'a str> = {
+    <l:NumExprMul> "*" <r:NumExprUnary> =>
+        ConstExpr::Bin(BinOp::Mul, Box::new(l), Box::new(r)),
+    <l:NumExprMul> "/" <r:NumExprUnary> =>
+        ConstExpr::Bin(BinOp::Div, Box::new(l), Box::new(r)),
+    NumExprUnary,
+};
+
+NumExprUnary: ConstExpr<&'a str> = {
+    "-" <e:NumExprAtom> => ConstExpr::Neg(Box::new(e)),
+    NumExprAtom,
+};
+
+NumExprAtom: ConstExpr<&'a str> = {
+    <n:Number> => ConstExpr::Lit(n),
+    <id:Ident> <call:NumExprCallTail?> => {
+        match (id, call) {
+            ("pi", None) => ConstExpr::Pi,
+            ("exp", Some(arg)) => ConstExpr::Exp(Box::new(arg)),
+            (other, None) => ConstExpr::Ref(other),
+            // (other, Some(_)) — unknown function call; lalrpop has no
+            // user-action error path, so we encode unsupported calls as
+            // a Ref to the function name (will fail in the resolver
+            // with an "undefined identifier" error pointing at it).
+            (other, Some(_)) => ConstExpr::Ref(other),
+        }
+    },
+    "(" <e:NumExpr> ")" => e,
+};
+
+NumExprCallTail: ConstExpr<&'a str> = {
+    "(" <e:NumExpr> ")" => e,
+};
+
+ValueList: Vec<Value<'a, &'a str>> = {
+    => Vec::new(),
+    <v:Value> <rest:("," Value)*> ","? => {
+        let mut out = vec![v];
+        for (_, x) in rest { out.push(x); }
+        out
+    }
+};
+
+// ------------------------------------------------------------
+// Nodes
+// ------------------------------------------------------------
+
+NodeDecl: NodeDecl<'a, &'a str> = {
+    // Block node with base refs: name <tags>? : base0, base1 { ... }
+    <name:Ident> <anno:OptAnnoNoValue> ":" <bases:BaseRefs> "{" <body:HyperItem*> "}" => NodeDecl {
+        anno,
+        inner: NodeInner { name, bases, body: Some(body) }
+    },
+    // Block node: name <tags> { ... }
+    <name:Ident> <anno:OptAnnoNoValue> "{" <body:HyperItem*> "}" => NodeDecl {
+        anno,
+        inner: NodeInner { name, bases: Vec::new(), body: Some(body) }
+    },
+
+    // Reference assignment: val_node <tags> -> a.b.c ;
+    <name:Ident> <tags:OptTags> "->" <r:RefPath> ";" => NodeDecl {
+        anno: Anno { tags, value: Some(Value::Ref(r)) },
+        inner: NodeInner { name, bases: Vec::new(), body: None }
+    },
+
+    // Statement node: val0 <int> 56 ;
+    <name:Ident> <anno:OptAnno> ";" => NodeDecl {
+        anno,
+        inner: NodeInner { name, bases: Vec::new(), body: None }
+    },
+};
+
+// ------------------------------------------------------------
+// Edges
+// ------------------------------------------------------------
+
+// @E1 { ... }   is an edge
+EdgeDecl: EdgeDecl<'a, &'a str> = {
+    <_sig:EdgeSig> <name:Ident> <anno:OptAnnoNoValue> ":" <bases:BaseRefs> "{" <body:HyperItem*> "}"
+    => EdgeDecl {
+        anno,
+        inner: EdgeInner { name, bases, body }
+    },
+    <_sig:EdgeSig> <name:Ident> <anno:OptAnno> "{" <body:HyperItem*> "}"
+    => EdgeDecl {
+        anno,
+        inner: EdgeInner { name, bases: Vec::new(), body }
+    }
+};
+
+EdgeSig: () = {
+    "@" => (),
+};
+
+// ------------------------------------------------------------
+// Arcs inside blocks/edges: +A -B ;
+// ------------------------------------------------------------
+
+HyperArc: HyperArc<'a, &'a str> = {
+    "(" <refs:SignedRefList> ")" <anno:OptAnno> ";" => HyperArc {
+        anno,
+        inner: ArcInner { refs }
+    }
+};
+
+SignedRefList: Vec<SignedRef<'a, &'a str>> = {
+    <x:SignedRef> <rest:("," SignedRef)*> ","? => {
+        let mut out = vec![x];
+        for (_, y) in rest { out.push(y); }
+        out
+    }
+};
+
+// ------------------------------------------------------------
+// References
+// ------------------------------------------------------------
+
+RefPath: Ref<&'a str> = {
+    <first:Ident> <rest:("." Ident)+> => {
+        let mut path = Vec::new();
+        path.push(first);
+        for (_, seg) in rest { path.push(seg); }
+        Ref { path }
+    },
+    <one:Ident> => Ref { path: vec![one] }
+};
+
+
+SignedRef: SignedRef<'a, &'a str> = {
+    "+" <pre:OptTags> <r:RefPath> <anno:OptAnno> => {
+        let mut anno = anno;
+        let mut tags = pre;
+        tags.extend(anno.tags);
+        anno.tags = tags;
+        SignedRef::Plus(RefAtom { target: r, anno })
+    },
+    "-" <pre:OptTags> <r:RefPath> <anno:OptAnno> => {
+        let mut anno = anno;
+        let mut tags = pre;
+        tags.extend(anno.tags);
+        anno.tags = tags;
+        SignedRef::Minus(RefAtom { target: r, anno })
+    },
+    "~" <pre:OptTags> <r:RefPath> <anno:OptAnno> => {
+        let mut anno = anno;
+        let mut tags = pre;
+        tags.extend(anno.tags);
+        anno.tags = tags;
+        SignedRef::Neutral(RefAtom { target: r, anno })
+    },
+};
+// ------------------------------------------------------------
+// Annotation helpers
+// ------------------------------------------------------------
+
+OptAnno: Anno<'a, &'a str> = {
+    <tags:OptTags> <v:OptValue> => Anno { tags, value: v }
+};
+
+OptAnnoNoValue: Anno<'a, &'a str> = {
+    <tags:OptTags> => Anno { tags, value: None }
+};
+
+OptTags: Vec<&'a str> = {
+    => Vec::new(),
+    "<" <xs:IdentList> ">" => xs
+};
+
+OptValue: Option<Value<'a, &'a str>> = {
+    => None,
+    <v:Value> => Some(v)
+};
+
+pub QueryVar: &'a str = {
+    "?" <name:Ident> => name,
+};
+
+DeepContainemnt: () = {
+    "." "." => ()
+};
+
+StarRef: () = {
+    "*" => ()
+}
+
+// ------------------------------------------------------------
+// Terminals
+// ------------------------------------------------------------
+/*
+Ident: String = {
+    <s:r"[A-Za-z_][A-Za-z0-9_]*"> => s.to_string()
+};
+
+StrLit: String = {
+    <s:r#""([^"\\]|\\.)*""#> => s[1..s.len()-1].to_string()
+};
+
+Number: f64 = {
+    <s:r"[0-9]+(\.[0-9]+)?"> => s.parse().unwrap()
+};
+*/

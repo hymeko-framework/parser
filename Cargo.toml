@@ -1,0 +1,15 @@
+[package]
+name = "parser"
+version = "0.1.0"
+edition = "2024"
+
+[build-dependencies]
+lalrpop = ">=0.22.2"
+
+[dependencies]
+lalrpop-util = { version = ">=0.22.2", features = ["lexer", "unicode"]}
+[dev-dependencies]
+criterion = "0.8.2"
+[[bench]]
+name = "parser_bench"
+harness = false

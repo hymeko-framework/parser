@@ -181,25 +181,28 @@ pub trait CommonLexer<'a> {
                 let text = unsafe { std::str::from_utf8_unchecked(slice) };
                 Token::Str(std::borrow::Cow::Borrowed(text))
             } else {
-                let mut out = String::with_capacity(slice.len());
+                let mut out = Vec::with_capacity(slice.len());
                 let mut j = 0;
                 while j < slice.len() {
                     if slice[j] == b'\\' && j + 1 < slice.len() {
                         match slice[j + 1] {
-                            b'n' => out.push('\n'),
-                            b'r' => out.push('\r'),
-                            b't' => out.push('\t'),
-                            b'\\' => out.push('\\'),
-                            b'"' => out.push('"'),
-                            other => out.push(other as char),
+                            b'n' => out.push(b'\n'),
+                            b'r' => out.push(b'\r'),
+                            b't' => out.push(b'\t'),
+                            b'\\' => out.push(b'\\'),
+                            b'"' => out.push(b'"'),
+                            other => out.push(other),
                         }
                         j += 2;
                     } else {
-                        out.push(slice[j] as char);
+                        out.push(slice[j]);
                         j += 1;
                     }
                 }
-                Token::Str(std::borrow::Cow::Owned(out)) // Heap allocation only when strictly required.
+                let text = String::from_utf8(out).map_err(|_| LexError {
+                    at: start, msg: "Invalid UTF-8 in string literal".into(),
+                })?;
+                Token::Str(std::borrow::Cow::Owned(text))
             }
         };
 

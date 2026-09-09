@@ -437,6 +437,54 @@ mod simd_lexer_tests {
         });
     }
 
+    #[test]
+    fn course_escaped_unicode_is_byte_exact() {
+        for (input, expected) in [
+            (r#""\\alpha árvíztűrő 東京""#, "\\alpha árvíztűrő 東京"),
+            (r#""árvíztűrő 東京 \\beta""#, "árvíztűrő 東京 \\beta"),
+            (r#""\á\東\🦀""#, "á東🦀"),
+            (r#""árvíz\n東京\t🦀\r\"é\\""#, "árvíz\n東京\t🦀\r\"é\\"),
+        ] {
+            run_complex_test(input, |lexer| {
+                match lexer.next() {
+                    Some(Ok((start, Token::Str(value), end))) => {
+                        assert_eq!(value.as_bytes(), expected.as_bytes(), "{input}");
+                        assert!(matches!(value, std::borrow::Cow::Owned(_)));
+                        assert_eq!((start, end), (0, input.len()));
+                    }
+                    other => panic!("Expected escaped Unicode string, got {other:?}"),
+                }
+                assert_eq!(lexer.next(), None);
+            });
+        }
+    }
+
+    #[test]
+    fn course_plain_unicode_keeps_borrowed_fast_path() {
+        let input = "\"árvíztűrő 東京 🦀 é\"";
+        run_complex_test(input, |lexer| {
+            match lexer.next() {
+                Some(Ok((start, Token::Str(std::borrow::Cow::Borrowed(value)), end))) => {
+                    assert_eq!(value, &input[1..input.len() - 1]);
+                    assert_eq!(value.as_ptr(), input[1..].as_ptr());
+                    assert_eq!((start, end), (0, input.len()));
+                }
+                other => panic!("Expected borrowed Unicode string, got {other:?}"),
+            }
+            assert_eq!(lexer.next(), None);
+        });
+    }
+
+    #[test]
+    fn course_unterminated_unicode_keeps_error_payload() {
+        for input in ["\"árvíztűrő 東京", "\"東京\\", "\"árvíz\\\""] {
+            run_complex_test(input, |lexer| match lexer.next() {
+                Some(Err(error)) => assert_eq!(error.msg, "Unterminated string literal"),
+                other => panic!("Expected unterminated Unicode string error, got {other:?}"),
+            });
+        }
+    }
+
     // ============================================================================
     // COMPLEX MULTI-TOKEN SEQUENCES
     // ============================================================================

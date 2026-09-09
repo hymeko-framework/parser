@@ -50,7 +50,7 @@ extern {
 
 
 pub Description: Description<'a, &'a str> = {
-    <name:Ident> <hb:OptHeaderBlock> <items:HyperItem*> => {
+    <name:Ident> <hb:OptHeaderBlock> <items:HyperItems> => {
         let (imports, usings, header, consts) = hb;
         Description { name, header, imports, usings, consts, items }
     }
@@ -106,6 +106,9 @@ OptImportAlias: Option<&'a str> = {
     => None,
 };
 
+// Fuse representation-only wrappers into the consuming grammar action.
+// The AST still contains the same variants; intermediate LR symbols disappear.
+#[inline]
 HyperItem: HyperItem<'a, &'a str> = {
     <n:NodeDecl>  => HyperItem::Node(n),
     <e:EdgeDecl>  => HyperItem::Edge(e),
@@ -126,12 +129,7 @@ BaseRef: SignedRef<'a, &'a str> = {
 };
 
 BaseRefs: Vec<SignedRef<'a, &'a str>> = {
-    <x:BaseRef> <rest:("," BaseRef)*> ","? => {
-        let mut out = vec![x];
-        for (_, y) in rest { out.push(y); }
-        out
-    }
-
+    <xs:Separated<BaseRef, ",">> ","? => xs
 };
 
 // ------------------------------------------------------------
@@ -139,13 +137,18 @@ BaseRefs: Vec<SignedRef<'a, &'a str>> = {
 // ------------------------------------------------------------
 
 IdentList: Vec<&'a str> = {
-    <x:Ident> <rest:("," Ident)*> ","? => {
-        let mut out = vec![x];
-        for (_, y) in rest { out.push(y); }
-        out
-    }
+    <xs:Separated<Ident, ",">> ","? => xs
 };
 
+// Accumulate directly in the result buffer. A (separator, item)* tail
+// otherwise allocates a temporary Vec and moves every item a second time.
+// Nonempty by construction; callers decide whether empty/trailing is legal.
+Separated<T, Sep>: Vec<T> = {
+    <x:T> => vec![x],
+    <mut xs:Separated<T, Sep>> Sep <x:T> => { xs.push(x); xs }
+};
+
+#[inline]
 Value: Value<'a, &'a str> = {
     <s:StrLit> => Value::Str(s),
     <n:Number> => Value::Num(n),
@@ -209,25 +212,34 @@ NumExprCallTail: ConstExpr<&'a str> = {
 
 ValueList: Vec<Value<'a, &'a str>> = {
     => Vec::new(),
-    <v:Value> <rest:("," Value)*> ","? => {
-        let mut out = vec![v];
-        for (_, x) in rest { out.push(x); }
-        out
-    }
+    <xs:Separated<Value, ",">> ","? => xs
 };
 
 // ------------------------------------------------------------
 // Nodes
 // ------------------------------------------------------------
 
+// Keep empty and singleton lists compact. Allocate the first pair together,
+// avoiding the immediate reallocation produced by `HyperItem*` for two items.
+HyperItems: Vec<HyperItem<'a, &'a str>> = {
+    => Vec::new(),
+    <item:HyperItem> => vec![item],
+    <items:HyperItemsMany> => items,
+};
+
+HyperItemsMany: Vec<HyperItem<'a, &'a str>> = {
+    <first:HyperItem> <second:HyperItem> => vec![first, second],
+    <mut items:HyperItemsMany> <item:HyperItem> => { items.push(item); items },
+};
+
 NodeDecl: NodeDecl<'a, &'a str> = {
     // Block node with base refs: name <tags>? : base0, base1 { ... }
-    <name:Ident> <anno:OptAnnoNoValue> ":" <bases:BaseRefs> "{" <body:HyperItem*> "}" => NodeDecl {
+    <name:Ident> <anno:OptAnnoNoValue> ":" <bases:BaseRefs> "{" <body:HyperItems> "}" => NodeDecl {
         anno,
         inner: NodeInner { name, bases, body: Some(body) }
     },
     // Block node: name <tags> { ... }
-    <name:Ident> <anno:OptAnnoNoValue> "{" <body:HyperItem*> "}" => NodeDecl {
+    <name:Ident> <anno:OptAnnoNoValue> "{" <body:HyperItems> "}" => NodeDecl {
         anno,
         inner: NodeInner { name, bases: Vec::new(), body: Some(body) }
     },
@@ -251,12 +263,12 @@ NodeDecl: NodeDecl<'a, &'a str> = {
 
 // @E1 { ... }   is an edge
 EdgeDecl: EdgeDecl<'a, &'a str> = {
-    <_sig:EdgeSig> <name:Ident> <anno:OptAnnoNoValue> ":" <bases:BaseRefs> "{" <body:HyperItem*> "}"
+    <_sig:EdgeSig> <name:Ident> <anno:OptAnnoNoValue> ":" <bases:BaseRefs> "{" <body:HyperItems> "}"
     => EdgeDecl {
         anno,
         inner: EdgeInner { name, bases, body }
     },
-    <_sig:EdgeSig> <name:Ident> <anno:OptAnno> "{" <body:HyperItem*> "}"
+    <_sig:EdgeSig> <name:Ident> <anno:OptAnno> "{" <body:HyperItems> "}"
     => EdgeDecl {
         anno,
         inner: EdgeInner { name, bases: Vec::new(), body }
@@ -279,25 +291,16 @@ HyperArc: HyperArc<'a, &'a str> = {
 };
 
 SignedRefList: Vec<SignedRef<'a, &'a str>> = {
-    <x:SignedRef> <rest:("," SignedRef)*> ","? => {
-        let mut out = vec![x];
-        for (_, y) in rest { out.push(y); }
-        out
-    }
+    <xs:Separated<SignedRef, ",">> ","? => xs
 };
 
 // ------------------------------------------------------------
 // References
 // ------------------------------------------------------------
 
+#[inline]
 RefPath: Ref<&'a str> = {
-    <first:Ident> <rest:("." Ident)+> => {
-        let mut path = Vec::new();
-        path.push(first);
-        for (_, seg) in rest { path.push(seg); }
-        Ref { path }
-    },
-    <one:Ident> => Ref { path: vec![one] }
+    <path:Separated<Ident, ".">> => Ref { path }
 };
 
 
@@ -328,19 +331,25 @@ SignedRef: SignedRef<'a, &'a str> = {
 // Annotation helpers
 // ------------------------------------------------------------
 
+// Fuse the small optional wrappers into their callers. They still construct
+// the same Anno, but no longer shuttle empty values through the LR stack.
+#[inline]
 OptAnno: Anno<'a, &'a str> = {
     <tags:OptTags> <v:OptValue> => Anno { tags, value: v }
 };
 
+#[inline]
 OptAnnoNoValue: Anno<'a, &'a str> = {
     <tags:OptTags> => Anno { tags, value: None }
 };
 
+#[inline]
 OptTags: Vec<&'a str> = {
     => Vec::new(),
     "<" <xs:IdentList> ">" => xs
 };
 
+#[inline]
 OptValue: Option<Value<'a, &'a str>> = {
     => None,
     <v:Value> => Some(v)

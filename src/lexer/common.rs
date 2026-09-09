@@ -9,6 +9,28 @@ fn is_ident_start(c: u8) -> bool {
     matches!(c, b'_' | b'a'..=b'z' | b'A'..=b'Z')
 }
 
+/// Length of the prefix containing neither a quote nor an escape introducer.
+/// Safe word loads skip eight bytes at a time, including arbitrary UTF-8 bytes.
+#[inline]
+fn string_prefix_len(bytes: &[u8]) -> usize {
+    let mut i = 0;
+    let has_zero =
+        |word: u64| word.wrapping_sub(0x0101_0101_0101_0101) & !word & 0x8080_8080_8080_8080 != 0;
+    while let Some(chunk) = bytes[i..].first_chunk::<8>() {
+        let word = u64::from_ne_bytes(*chunk);
+        if has_zero(word ^ 0x2222_2222_2222_2222) || has_zero(word ^ 0x5c5c_5c5c_5c5c_5c5c) {
+            break;
+        }
+        i += 8;
+    }
+    // The zero-byte mask is a presence test, not an exact lane bitmap:
+    // borrows can mark adjacent lanes. Locate the first delimiter scalarly.
+    i + bytes[i..]
+        .iter()
+        .position(|&b| b == b'"' || b == b'\\')
+        .unwrap_or(bytes.len() - i)
+}
+
 /// A közös lexer “backend” trait.
 /// A SIMD/simple lexer csak ezt implementálja + a 2 speciális hookot.
 pub trait CommonLexer<'a> {
@@ -152,16 +174,17 @@ pub trait CommonLexer<'a> {
         let mut has_escape = false;
         let len = self.len();
 
-        // Pass 1: Fast-scan via index, avoiding direct slice holding
+        // Skip ordinary runs without changing lexer position on an error.
         while i < len {
-            let Some(c) = self.byte_at(i) else { break; };
+            i += string_prefix_len(&self.bytes()[i..]);
+            let Some(c) = self.byte_at(i) else {
+                break;
+            };
             if c == b'"' {
                 break;
-            } else if c == b'\\' {
+            } else {
                 has_escape = true;
                 i += 2; // Skip the backslash and the escaped character
-            } else {
-                i += 1;
             }
         }
 
@@ -181,6 +204,8 @@ pub trait CommonLexer<'a> {
                 let text = unsafe { std::str::from_utf8_unchecked(slice) };
                 Token::Str(std::borrow::Cow::Borrowed(text))
             } else {
+                // Preserve UTF-8 bytes on the escaped path too. Casting each
+                // byte to char corrupts non-ASCII text whenever any escape occurs.
                 let mut out = Vec::with_capacity(slice.len());
                 let mut j = 0;
                 while j < slice.len() {
@@ -200,9 +225,10 @@ pub trait CommonLexer<'a> {
                     }
                 }
                 let text = String::from_utf8(out).map_err(|_| LexError {
-                    at: start, msg: "Invalid UTF-8 in string literal".into(),
+                    at: start,
+                    msg: "Invalid UTF-8 in string literal".into(),
                 })?;
-                Token::Str(std::borrow::Cow::Owned(text))
+                Token::Str(std::borrow::Cow::Owned(text)) // Heap allocation only when strictly required.
             }
         };
 
@@ -285,4 +311,44 @@ pub fn next_token<'a, L: CommonLexer<'a>>(lex: &mut L) -> Option<LexItem<'a>> {
 
     let end = lex.pos();
     Some(Ok((start, tok, end)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::string_prefix_len;
+
+    #[test]
+    fn string_prefix_matches_scalar_for_bytes_lanes_and_tails() {
+        for len in 0..40 {
+            for encoded in 0..512 {
+                let byte = (encoded / 2) as u8;
+                let delimiter = b"\"\\"[encoded % 2];
+                let mut input = vec![byte; len];
+                for index in 0..=len {
+                    if index < len {
+                        input[index] = delimiter;
+                    }
+                    let expected = input
+                        .iter()
+                        .position(|&b| b == b'"' || b == b'\\')
+                        .unwrap_or(input.len());
+                    assert_eq!(string_prefix_len(&input), expected, "{input:?}");
+                    if index < len {
+                        input[index] = byte;
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn string_prefix_handles_cross_lane_borrows_and_multiple_delimiters() {
+        for first in 0..=u8::MAX {
+            for second in 0..=u8::MAX {
+                let input = [0xff, first, second, b'!', b'"', b'\\', 0, 0x80];
+                let expected = input.iter().position(|&b| b == b'"' || b == b'\\').unwrap();
+                assert_eq!(string_prefix_len(&input), expected);
+            }
+        }
+    }
 }

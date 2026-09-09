@@ -1,10 +1,11 @@
 // src/hymeko.lalrpop
 use crate::ast::*;
+use crate::builder::{DescriptionInput, DeclarationBody, NodeInput, EdgeInput};
 use crate::lexer::Token;
 use std::borrow::Cow;
 
 
-grammar<'a>;
+grammar<'a, B>(builder: &mut B) where B: crate::builder::OutputBuilder<'a>;
 
 extern {
     type Location = usize;
@@ -49,10 +50,9 @@ extern {
 
 
 
-pub Description: Description<'a, &'a str> = {
+pub Description: B::Output = {
     <name:Ident> <hb:OptHeaderBlock> <items:HyperItems> => {
-        let (imports, usings, header, consts) = hb;
-        Description { name, header, imports, usings, consts, items }
+        builder.description(DescriptionInput { name, header: hb, items })
     }
 };
 
@@ -109,10 +109,10 @@ OptImportAlias: Option<&'a str> = {
 // Fuse representation-only wrappers into the consuming grammar action.
 // The AST still contains the same variants; intermediate LR symbols disappear.
 #[inline]
-HyperItem: HyperItem<'a, &'a str> = {
-    <n:NodeDecl>  => HyperItem::Node(n),
-    <e:EdgeDecl>  => HyperItem::Edge(e),
-    <a:HyperArc>  => HyperItem::Arc(a),
+HyperItem: B::Item = {
+    <n:NodeDecl>  => builder.node(n),
+    <e:EdgeDecl>  => builder.edge(e),
+    <a:HyperArc>  => builder.arc(a),
 };
 
 BaseRef: SignedRef<'a, &'a str> = {
@@ -221,39 +221,39 @@ ValueList: Vec<Value<'a, &'a str>> = {
 
 // Keep empty and singleton lists compact. Allocate the first pair together,
 // avoiding the immediate reallocation produced by `HyperItem*` for two items.
-HyperItems: Vec<HyperItem<'a, &'a str>> = {
+HyperItems: Vec<B::Item> = {
     => Vec::new(),
     <item:HyperItem> => vec![item],
     <items:HyperItemsMany> => items,
 };
 
-HyperItemsMany: Vec<HyperItem<'a, &'a str>> = {
+HyperItemsMany: Vec<B::Item> = {
     <first:HyperItem> <second:HyperItem> => vec![first, second],
     <mut items:HyperItemsMany> <item:HyperItem> => { items.push(item); items },
 };
 
-NodeDecl: NodeDecl<'a, &'a str> = {
+NodeDecl: NodeInput<'a, B::Item> = {
     // Block node with base refs: name <tags>? : base0, base1 { ... }
-    <name:Ident> <anno:OptAnnoNoValue> ":" <bases:BaseRefs> "{" <body:HyperItems> "}" => NodeDecl {
+    <name:Ident> <anno:OptAnnoNoValue> ":" <bases:BaseRefs> "{" <body:HyperItems> "}" => NodeInput {
         anno,
-        inner: NodeInner { name, bases, body: Some(body) }
+        inner: DeclarationBody { name, bases, body: Some(body) }
     },
     // Block node: name <tags> { ... }
-    <name:Ident> <anno:OptAnnoNoValue> "{" <body:HyperItems> "}" => NodeDecl {
+    <name:Ident> <anno:OptAnnoNoValue> "{" <body:HyperItems> "}" => NodeInput {
         anno,
-        inner: NodeInner { name, bases: Vec::new(), body: Some(body) }
+        inner: DeclarationBody { name, bases: Vec::new(), body: Some(body) }
     },
 
     // Reference assignment: val_node <tags> -> a.b.c ;
-    <name:Ident> <tags:OptTags> "->" <r:RefPath> ";" => NodeDecl {
+    <name:Ident> <tags:OptTags> "->" <r:RefPath> ";" => NodeInput {
         anno: Anno { tags, value: Some(Value::Ref(r)) },
-        inner: NodeInner { name, bases: Vec::new(), body: None }
+        inner: DeclarationBody { name, bases: Vec::new(), body: None }
     },
 
     // Statement node: val0 <int> 56 ;
-    <name:Ident> <anno:OptAnno> ";" => NodeDecl {
+    <name:Ident> <anno:OptAnno> ";" => NodeInput {
         anno,
-        inner: NodeInner { name, bases: Vec::new(), body: None }
+        inner: DeclarationBody { name, bases: Vec::new(), body: None }
     },
 };
 
@@ -262,16 +262,16 @@ NodeDecl: NodeDecl<'a, &'a str> = {
 // ------------------------------------------------------------
 
 // @E1 { ... }   is an edge
-EdgeDecl: EdgeDecl<'a, &'a str> = {
+EdgeDecl: EdgeInput<'a, B::Item> = {
     <_sig:EdgeSig> <name:Ident> <anno:OptAnnoNoValue> ":" <bases:BaseRefs> "{" <body:HyperItems> "}"
-    => EdgeDecl {
+    => EdgeInput {
         anno,
-        inner: EdgeInner { name, bases, body }
+        inner: DeclarationBody { name, bases, body }
     },
     <_sig:EdgeSig> <name:Ident> <anno:OptAnno> "{" <body:HyperItems> "}"
-    => EdgeDecl {
+    => EdgeInput {
         anno,
-        inner: EdgeInner { name, bases: Vec::new(), body }
+        inner: DeclarationBody { name, bases: Vec::new(), body }
     }
 };
 

@@ -15,6 +15,10 @@
 \draw[->] (h)--(o);
 \node (q) [below=of o] {Persistent regression gate; generated laws; scaling controls};
 \draw[->] (o)--(q);
+\node (f2) [below=of q] {PERF-2: fuse constructors; AST/error parity; separate A/B boundaries};
+\draw[->] (q)--(f2);
+\node (b2) [below=of f2] {Single grammar: native AST / direct typed output; parity and A/B};
+\draw[->] (f2)--(b2);
 \end{tikzpicture}
 
 % 2026-09-08: Profile native AST; optimize proven hotspot; matched A/B preserves corpus.

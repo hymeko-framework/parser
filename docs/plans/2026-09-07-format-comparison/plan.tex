@@ -285,5 +285,104 @@ Rust builds merely for measurements. Reuse existing plotter and report; store ne
 raw evidence under optimization/regression-checks. Roll back only new hunks if
 gates fail; preserve all prior work. No new production parser or direct-AST bypass
 is attempted without its own semantic design and evidence.
+\paragraph{PERF-2 AST construction, Created-at: 2026-09-09 19:47 +02:00.}
+Owner Parser; Core protected items empty. ETA 30--40 minutes: grammar candidate
+and controls 10, matched measurements/profile 15, report/publication 10.
+Base 0019eb0 equals freshly fetched GitHub and LAN course branches. Reuse the
+course integration branch in its retired worktree path to keep the published
+control separate from the original dirty master checkout and its historical edits.
+Prior consuming-record linked profile: 4329/9264 samples include LR reduction;
+6970 include parsing. Test the hypothesis that declaration-to-item reductions move
+large AST values unnecessarily. Inline declaration constructors into their existing
+consumers in the single LALRPOP grammar; no generated-source edits, second parser,
+new dependency or public API. Candidate files src/hymeko.lalrpop and existing
+ tests/format\_comparison.rs; this plan bundle and the existing report. Retain or
+roll back based on same-host controls; do not claim AST-free decoding from this.
+Before candidate code, save published executable/PDB and grammar; strengthen
+semantic/invalid-input tests on baseline, then candidate. Preserve node/edge/arc
+order, tags, signed paths, nested values, UTF-8 and exact diagnostics. Measure
+50k records in all five patterns, AST and owned records separately, same harness,
+release debug=1, CPU 0, two reversed rounds, ten post-warmup samples. Run large
+smokes first; memory cap 16 GiB and 180 seconds per process through existing runner.
+Generation/I/O/final-output drop excluded as before. JSON typed/DOM controls are
+separate boundaries. Investigate over-10-percent regressions; inconclusive gates
+are not passes. Capture a matching candidate profile for a greater-than-10-percent
+speed claim. Code-size growth and small-input controls are explicit risks.
+Record raw samples, median/IQR/worst, peak RSS, source/binary hashes and SVG/PDF.
+If unhelpful, restore only this candidate's hunks; retain evidence and the original
+PERF-1 release. No consumer pin or SDK publication without an accepted provider.
+\paragraph{PERF-2 generator finding, 19:53.}
+Stop all-three-constructor candidate after 167 seconds in LALRPOP generation;
+last observed memory 54.2 MiB, CPU 132.8 seconds. No executable or speed claim.
+Inlining multiple declaration alternatives compounds at the existing first-pair
+list production. Narrow the same hypothesis to the single HyperArc constructor;
+record rejected patch and build evidence. The accepted-language/diagnostic oracle
+is fixed from the published baseline, never updated to accommodate the candidate.
+\paragraph{PERF-2 typed output construction, Created-at: 20:04 +02:00.}
+Continue the authorized PERF-2 after rejecting the reduction-only probe. ETA
+45 minutes: API/grammar and parity 20, focused A/B and controls 15, integration
+and archival 10. Parser owns a generic OutputBuilder contract with native AST
+and owned-record implementations. Keep a single LALRPOP grammar. Generalize
+Description and node/edge bodies with a default item type, preserving existing
+source signatures through default type parameters. Add an explicit builder entry
+point; retain existing parse entrypoints and DescriptionParser/QueryVarParser
+facades, including token conversion and exact parse errors. No new dependencies,
+unsafe code or protected Core implementation changes. Additional files:
+src/builder.rs, src/lib.rs, src/ast.rs, src/hymeko.lalrpop,
+benches/formats/adapters.rs, benches/format\_bench.rs and existing format tests.
+Builders receive every syntactic construct; native AST is the compatibility
+implementation. Header types and value/reference syntax remain canonical. Callback
+side effects before a later syntax error are documented, never transactional by
+implication. Owned-record semantic errors are stored and returned only after
+successful syntax parsing, preserving existing error precedence and field order.
+Keep full AST projection as an independent test/measurement oracle; default typed
+decode may switch only after parity and measured improvement. Test headers,
+all node forms, nested records, reserved field names at roots/inside blocks,
+malformed records, ownership transfer, lexer errors and the existing frozen full
+AST/error digest. All native tests, Clippy, touched formatting, public API checks;
+measure original default AST and direct records separately using unchanged fixtures,
+runner/caps, same host and at least two rounds. Preserve 1000/50000 controls and
+code size. No claim of Core IR or browser speed before consumer integration.
+Rollback all builder production hunks on unresolved compatibility or regressions;
+retain controls and evidence. Expected memory remains below prior 349 MiB timed
+peak by a wide margin; 16-GiB / 180-second process guards still apply.
+\paragraph{Typed-output native control, 20:14.}
+Windows: 72 cells complete; one stable linked-record gate passes, eleven cases
+are inconclusive. Large owned-record pooled medians improve 21--26 percent;
+native AST no universal win. Small linked memory is unstable and needs a
+native control. Amaterasu observed load 0.15/0.09/0.06. Use /tmp/hymeko-parser-typed-output-20260909
+with exact 0019eb0 and candidate source archives, Rust 1.97.1, release debug=1,
+CPU 2 for all variants, existing fixtures and Graph ProcessRunner. Reuse the old
+build cache but retain independent executable/source pairs. Two rounds on the
+same 1000/50000 cases, 16-GiB / 180-second guards. Capture separate Windows samply
+profiles on linked/Unicode before and after; no latency measurements alongside
+profiling or builds on that host. Additional ETA 15--20 minutes.
+\paragraph{API inference regression, 20:26.}
+A new compile regression proves that adding a default Item parameter to the
+public Description breaks an existing unannotated empty struct literal (E0282).
+Restore src/ast.rs exactly. OutputBuilder will use construction-input types in
+its own module: DescriptionInput (name, existing HeaderBlock, built items), shared
+DeclarationBody plus NodeInput/EdgeInput aliases using the existing annotation
+wrapper. AstBuilder moves these fields into the original AST types without
+allocation. This preserves caller inference and Debug shape and keeps construction
+inputs separate from the canonical native AST; no second semantic IR. Re-run
+native/owned controls after this representation boundary correction. Retained
+owned-buffer diagnostic at 1000 records is lower for the direct builder in all
+five patterns; freeze that allocation-capacity bound as an additional test.
+\paragraph{Final verification and collector correction, 21:06.}
+The final API preserves the original AST and lexer source. A Windows deep-path
+collector failure exposed a silent glob omission after 18 accepted cells; extend
+the existing Campaign path handling for local and UNC paths, add real deep-path
+and mocked UNC regressions, retain the orphaned raw data and resume by hash.
+Final added tooling scope: scripts/format\_campaign.py, scripts/format\_report.py,
+scripts/test\_format\_report.py and generated SYMBOLS.md. Final production scope
+excludes src/ast.rs and benches/format\_bench.rs. Core changes strategy docs only;
+protected items remain empty. Both 72-cell final controls completed. Linux flat
+and Unicode owned medians improve 10--11 percent; linked remains inconclusive,
+long-text is 2.33 percent slower, AST has no measured gain. JSON remains faster.
+All 123 Parser tests, 2 doctests, 11 Python methods, 20 large round trips and
+457 Core tests plus 7 doctests pass. WASM library compile-check passes.
+Publication retains the unchanged Core/SDK pins; no default-branch merge.
+
 \begin{center}\input{plan.tikz}\end{center}
 \end{document}

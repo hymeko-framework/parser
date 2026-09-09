@@ -81,10 +81,7 @@ impl Format {
             Self::Xml => quick_xml::de::from_str(text).map_err(|e| e.to_string()),
             Self::Yaml => serde_saphyr::from_str_with_options(text, Self::yaml_options())
                 .map_err(|e| e.to_string()),
-            Self::Hymeko => {
-                let ast = parser::parse_description(text).map_err(|e| format!("{e:?}"))?;
-                Dataset::from_hymeko(ast)
-            }
+            Self::Hymeko => RecordBuilder::decode(text),
         }
     }
 }
@@ -200,5 +197,133 @@ impl Link {
             sign,
             weight: *weight,
         })
+    }
+}
+
+/// Benchmark consumer of the production generic parser; no separate grammar.
+pub struct RecordBuilder;
+
+pub enum BuiltItem<'a> {
+    Leaf(&'a str, Option<Value<'a, &'a str>>),
+    Node(&'a str, Result<Record, String>),
+    Edge(&'a str, Result<Vec<Link>, String>),
+    Arc(Result<Vec<Link>, String>),
+}
+
+impl BuiltItem<'_> {
+    fn record(self) -> Result<Record, String> {
+        match self {
+            Self::Node(_, record) => record,
+            Self::Leaf(..) => Err("missing value".into()),
+            _ => Err("expected benchmark record node".into()),
+        }
+    }
+}
+
+impl RecordBuilder {
+    pub fn decode(source: &str) -> Result<Dataset, String> {
+        parser::parse_description_with(source, &mut Self).map_err(|e| format!("{e:?}"))?
+    }
+
+    fn record(name: &str, items: Vec<BuiltItem<'_>>) -> Result<Record, String> {
+        let mut record = Record {
+            id: name.into(),
+            value: 0.0,
+            text: String::new(),
+            child: Vec::new(),
+            link: Vec::new(),
+        };
+        let mut have_value = false;
+        let mut have_text = false;
+        for item in items {
+            match item {
+                BuiltItem::Leaf("value", value) => {
+                    let Some(Value::Num(value)) = value else {
+                        return Err("expected numeric value".into());
+                    };
+                    if have_value {
+                        return Err("duplicate value".into());
+                    }
+                    record.value = value;
+                    have_value = true;
+                }
+                BuiltItem::Leaf("text", value) => {
+                    let Some(Value::Str(value)) = value else {
+                        return Err("expected text".into());
+                    };
+                    if have_text {
+                        return Err("duplicate text".into());
+                    }
+                    record.text = value.into_owned();
+                    have_text = true;
+                }
+                // Block-node annotations cannot contain values in the grammar.
+                // Preserve field interpretation before any nested record error.
+                BuiltItem::Node("value", _) => return Err("expected numeric value".into()),
+                BuiltItem::Node("text", _) => return Err("expected text".into()),
+                node @ (BuiltItem::Node(..) | BuiltItem::Leaf(..)) => {
+                    record.child.push(node.record()?);
+                }
+                BuiltItem::Edge("refs", links) => record.link.extend(links?),
+                _ => return Err("unexpected benchmark record field".into()),
+            }
+        }
+        if !have_value {
+            return Err("missing value".into());
+        }
+        if !have_text {
+            return Err("missing text".into());
+        }
+        Ok(record)
+    }
+}
+
+impl<'a> parser::builder::OutputBuilder<'a> for RecordBuilder {
+    type Item = BuiltItem<'a>;
+    type Output = Result<Dataset, String>;
+
+    fn node(&mut self, node: parser::builder::NodeInput<'a, Self::Item>) -> Self::Item {
+        let name = node.inner.name;
+        match node.inner.body {
+            None => BuiltItem::Leaf(name, node.anno.value),
+            Some(items) => BuiltItem::Node(name, Self::record(name, items)),
+        }
+    }
+
+    fn edge(&mut self, edge: parser::builder::EdgeInput<'a, Self::Item>) -> Self::Item {
+        let links = edge
+            .inner
+            .body
+            .into_iter()
+            .try_fold(Vec::new(), |mut links, item| {
+                let BuiltItem::Arc(arc) = item else {
+                    return Err("expected link arc".into());
+                };
+                links.extend(arc?);
+                Ok(links)
+            });
+        BuiltItem::Edge(edge.inner.name, links)
+    }
+
+    fn arc(&mut self, arc: parser::ast::HyperArc<'a, &'a str>) -> Self::Item {
+        BuiltItem::Arc(
+            arc.inner
+                .refs
+                .into_iter()
+                .map(|r| Link::from_hymeko(&r))
+                .collect(),
+        )
+    }
+
+    fn description(
+        &mut self,
+        description: parser::builder::DescriptionInput<'a, Self::Item>,
+    ) -> Self::Output {
+        description
+            .items
+            .into_iter()
+            .map(BuiltItem::record)
+            .collect::<Result<_, _>>()
+            .map(|node| Dataset { node })
     }
 }

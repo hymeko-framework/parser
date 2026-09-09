@@ -2,11 +2,13 @@
 //!
 //! Public entry points:
 //! - [`parse_description`] for full `.hymeko` source files.
+//! - [`parse_description_with`] for a consumer-selected output builder.
 //! - [`parse_query_var`] for single `?name` query-variable fragments
 //!   (see `docs/examples/query_variables.md`).
 //! - [`read_source_file`] for the common load-from-disk helper.
 
 pub mod ast;
+pub mod builder;
 pub mod lexer;
 
 // LALRPOP-generated parser. We expand what `lalrpop_mod!(pub hymeko)` does
@@ -16,8 +18,68 @@ pub mod lexer;
 // sure you've run one of those at least once before the IDE tries to
 // resolve `DescriptionParser` and friends.
 #[allow(clippy::all, dead_code, unused_imports)]
-pub mod hymeko {
+mod grammar {
     include!(concat!(env!("OUT_DIR"), "/hymeko.rs"));
+}
+
+/// Compatibility facades for callers supplying their own token iterator.
+pub mod hymeko {
+    use crate::{ParseError, ast::AstStr, builder::AstBuilder, grammar, lexer::Token};
+
+    /// Original generated-parser token conversion contract.
+    pub trait __ToTriple<'a> {
+        fn to_triple(self) -> Result<(usize, Token<'a>, usize), ParseError<'a>>;
+    }
+
+    impl<'a, T: grammar::__ToTriple<'a, AstBuilder>> __ToTriple<'a> for T {
+        fn to_triple(self) -> Result<(usize, Token<'a>, usize), ParseError<'a>> {
+            grammar::__ToTriple::<'a, AstBuilder>::to_triple(self)
+        }
+    }
+
+    struct TokenInput<T>(T);
+
+    impl<'a, B: crate::builder::OutputBuilder<'a>, T: __ToTriple<'a>> grammar::__ToTriple<'a, B>
+        for TokenInput<T>
+    {
+        fn to_triple(self) -> Result<(usize, Token<'a>, usize), ParseError<'a>> {
+            self.0.to_triple()
+        }
+    }
+
+    /// Parses a description from the existing spanned-token interface.
+    #[derive(Default)]
+    pub struct DescriptionParser {
+        _private: (),
+    }
+
+    /// Parses one query variable from the existing spanned-token interface.
+    #[derive(Default)]
+    pub struct QueryVarParser {
+        _private: (),
+    }
+
+    macro_rules! facade {
+        ($parser:ident, $output:ty) => {
+            impl $parser {
+                pub fn new() -> Self {
+                    Self::default()
+                }
+
+                /// Preserves token order, lexical errors and grammar diagnostics.
+                pub fn parse<'a, T: __ToTriple<'a>, I: IntoIterator<Item = T>>(
+                    &self,
+                    tokens: I,
+                ) -> Result<$output, ParseError<'a>> {
+                    grammar::$parser::new()
+                        .parse(&mut AstBuilder, tokens.into_iter().map(TokenInput))
+                }
+            }
+        };
+    }
+
+    facade!(DescriptionParser, AstStr<'a>);
+    facade!(QueryVarParser, &'a str);
 }
 
 use std::fs;
@@ -25,10 +87,11 @@ use std::io;
 use std::path::Path;
 
 use crate::ast::AstStr;
-use crate::hymeko::{DescriptionParser, QueryVarParser};
-use crate::lexer::simd::{CoreLexer, ScalarLexer};
+use crate::builder::{AstBuilder, OutputBuilder};
+use crate::hymeko::QueryVarParser;
 #[cfg(target_arch = "x86_64")]
 use crate::lexer::simd::{Avx2Lexer, Sse2Lexer};
+use crate::lexer::simd::{CoreLexer, ScalarLexer};
 use crate::lexer::{LexError, Token};
 
 /// A tokenised `Spanned` item produced by any of the SIMD lexer tiers.
@@ -42,29 +105,49 @@ pub type ParseError<'a> = lalrpop_util::ParseError<usize, Token<'a>, LexError>;
 /// Generic boundary — the compiler instantiates one optimized copy per lexer
 /// tier (scalar / SSE2 / AVX2) so the SIMD dispatch stays monomorphic.
 #[inline(always)]
-fn parse_description_inner<'a, I>(iter: I) -> Result<AstStr<'a>, ParseError<'a>>
+fn parse_description_inner<'a, I, B>(iter: I, builder: &mut B) -> Result<B::Output, ParseError<'a>>
 where
     I: Iterator<Item = SpannedLexItem<'a>>,
+    B: OutputBuilder<'a>,
 {
-    DescriptionParser::new().parse(iter)
+    grammar::DescriptionParser::new().parse(builder, iter)
 }
 
 /// Parse a full `.hymeko` source into its AST, picking the best available
 /// lexer tier at runtime (AVX2 → SSE2 → scalar fallback).
 pub fn parse_description(input: &str) -> Result<AstStr<'_>, ParseError<'_>> {
+    parse_description_with(input, &mut AstBuilder)
+}
+
+/// Parse the full language while constructing a consumer-selected output.
+///
+/// Uses the same grammar and SIMD dispatch as [`parse_description`]. Syntax
+/// errors are returned unchanged. Builder callbacks can have run before an
+/// error; see [`OutputBuilder`] for the non-transactional callback contract.
+/// The input must outlive any borrowed data retained by the builder/output.
+///
+/// ```
+/// use parser::{builder::AstBuilder, parse_description_with};
+/// let ast = parse_description_with("Demo{} root;", &mut AstBuilder).unwrap();
+/// assert_eq!(ast.items.len(), 1);
+/// ```
+pub fn parse_description_with<'a, B: OutputBuilder<'a>>(
+    input: &'a str,
+    builder: &mut B,
+) -> Result<B::Output, ParseError<'a>> {
     let core = CoreLexer::new(input);
 
     #[cfg(target_arch = "x86_64")]
     {
         if std::is_x86_feature_detected!("avx2") {
-            return parse_description_inner(Avx2Lexer(core));
+            return parse_description_inner(Avx2Lexer(core), builder);
         }
         if std::is_x86_feature_detected!("sse2") {
-            return parse_description_inner(Sse2Lexer(core));
+            return parse_description_inner(Sse2Lexer(core), builder);
         }
     }
 
-    parse_description_inner(ScalarLexer(core))
+    parse_description_inner(ScalarLexer(core), builder)
 }
 
 // ---- Query-variable fragment ---------------------------------------------

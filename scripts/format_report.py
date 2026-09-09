@@ -26,13 +26,13 @@ PATTERN_DESCRIPTIONS = {
 PHASE_DESCRIPTIONS = {
     "serialize": "Identical owned records to UTF-8 text. Fixture generation and final text destruction excluded. HyMeKo uses a narrow benchmark writer, not the general IR writer.",
     "parse_document": "Resident UTF-8 to native HyMeKo AST, roxmltree DOM, or generic JSON/YAML values. Representations and ownership differ; this is a frontend comparison.",
-    "decode_records": "Resident UTF-8 to identical owned records. HyMeKo parses an AST then projects records; competitors deserialize directly. Temporary intermediates are included; final record destruction is excluded.",
+    "decode_records": "Resident UTF-8 to identical owned records. HyMeKo constructs records through the full grammar's output builder; competitors deserialize directly. Temporary intermediates are included; final record destruction is excluded. Historical AST-projection baselines are identified by their binary provenance.",
 }
 LIBRARIES = {
     "hymeko": {
         "label": "HyMeKo",
         "color": "#7c3aed",
-        "version": "parser 0.1.0 / 284c490 + escaped UTF-8 fix",
+        "version": "parser 0.1.0 / typed output builder; exact revision in binary/source provenance",
     },
     "json": {"label": "JSON", "color": "#0284c7", "version": "serde_json 1.0.151"},
     "xml": {

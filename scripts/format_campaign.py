@@ -212,9 +212,14 @@ class Campaign:
             else "failed"
         )
         if result["status"] == "ok" and not smoke:
-            samples = list(
-                (Path(result["directory"]) / "criterion").glob("**/new/sample.json")
-            )
+            sample_root = Path(result["directory"]) / "criterion"
+            # Criterion can write paths longer than MAX_PATH; Python's glob
+            # otherwise silently misses the deeper files on this Windows host.
+            if os.name == "nt" and not str(sample_root).startswith("\\\\?\\"):
+                absolute = str(sample_root.resolve())
+                native = "UNC\\" + absolute[2:] if absolute.startswith("\\\\") else absolute
+                sample_root = Path("\\\\?\\" + native)
+            samples = list(sample_root.glob("**/new/sample.json"))
             if len(samples) != 1:
                 raise RuntimeError(
                     f"Expected one Criterion sample set for {cell.key}: {samples}"

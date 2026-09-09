@@ -25,3 +25,12 @@ flowchart TD
     M --> J
     J --> Q[Automated same-host baseline gate: pass / regression / inconclusive]
     Q --> V2[Generated gate laws and ownership regressions; 10k / 50k scaling]
+
+    V2 --> F2[PERF-2: fuse AST constructor reductions]
+    F2 --> G2[Exact AST/errors; same-host AST and owned-record A/B; rollback gate]
+
+    G2 --> B2[Single grammar plus typed OutputBuilder]
+    B2 --> A2[Default native AST: compatibility oracle]
+    B2 --> D2[Direct owned records: deferred semantic errors]
+    A2 --> X2[Parity, ownership, AST and record performance gates]
+    D2 --> X2

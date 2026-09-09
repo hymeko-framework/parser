@@ -5,6 +5,8 @@ import contextlib
 import copy
 import io
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -21,6 +23,79 @@ from hypothesis import strategies as st
 
 
 class FormatReportTests(unittest.TestCase):
+    def test_deep_criterion_samples_are_not_silently_lost(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            binary = root / "bench"
+            binary.write_bytes(b"test binary")
+            (root / "input.hymeko").write_text("Test{}", encoding="utf-8")
+            (root / "flat-100.manifest.json").write_text(
+                json.dumps([{"format": "hymeko", "file": "input.hymeko", "bytes": 6}]),
+                encoding="utf-8",
+            )
+            directory = root / "samples"
+            extended = (
+                Path("\\\\?\\" + str(directory)) if os.name == "nt" else directory
+            )
+            samples = extended / "criterion" / ("a" * 120) / ("b" * 120) / "new"
+            try:
+                samples.mkdir(parents=True)
+                (samples / "sample.json").write_text(
+                    json.dumps({"times": [1_000_000] * 10, "iters": [1] * 10}),
+                    encoding="utf-8",
+                )
+                adapter = Mock(
+                    return_value={
+                        "directory": str(directory),
+                        "timeout": False,
+                        "resources": {
+                            "cap_ok": True,
+                            "peak_observed": True,
+                            "exit_code": 0,
+                        },
+                    }
+                )
+                campaign = Campaign(
+                    argparse.Namespace(
+                        output=root / "output",
+                        fixtures=root,
+                        binary=binary,
+                        affinity_mask=1,
+                        timeout=180,
+                    ),
+                    invoker=adapter,
+                )
+                result = campaign.run_cell(
+                    Cell("flat", 100, "hymeko", "parse_document", 1)
+                )
+                self.assertEqual(result["measurement"]["samples_ms"], [1.0] * 10)
+                if os.name == "nt":
+                    # UNC output must keep its namespace, without contacting a share.
+                    adapter.return_value["directory"] = r"\\server\share\output"
+                    with (
+                        patch.object(
+                            Path, "resolve", autospec=True, side_effect=lambda p: p
+                        ),
+                        patch.object(
+                            Path,
+                            "glob",
+                            autospec=True,
+                            return_value=[samples / "sample.json"],
+                        ) as scan,
+                    ):
+                        campaign.run_cell(
+                            Cell("flat", 100, "hymeko", "parse_document", 2)
+                        )
+                    self.assertEqual(
+                        str(scan.call_args.args[0]),
+                        r"\\?\UNC\server\share\output\criterion",
+                    )
+            finally:
+                # Only this test's freshly created TemporaryDirectory child.
+                assert directory.resolve().is_relative_to(root)
+                if extended.exists():
+                    shutil.rmtree(extended)
+
     def test_platform_adapter_forwards_and_preserves_failure_gate(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

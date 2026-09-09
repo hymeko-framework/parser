@@ -5,6 +5,183 @@ use formats::adapters::Format;
 use formats::model::{Dataset, Pattern};
 
 #[test]
+fn direct_builder_matches_owned_records_and_error_precedence() {
+    use formats::adapters::RecordBuilder;
+    fn retained_bytes(data: &Dataset) -> usize {
+        use formats::model::{Link, Record};
+        let mut total = data.node.capacity() * std::mem::size_of::<Record>();
+        let mut pending: Vec<_> = data.node.iter().collect();
+        while let Some(record) = pending.pop() {
+            total += record.id.capacity() + record.text.capacity();
+            total += record.child.capacity() * std::mem::size_of::<Record>();
+            total += record.link.capacity() * std::mem::size_of::<Link>();
+            total += record
+                .link
+                .iter()
+                .map(|link| link.target.capacity())
+                .sum::<usize>();
+            pending.extend(&record.child);
+        }
+        total
+    }
+    for pattern in Pattern::ALL {
+        for count in [0, 1, 2, 17, 1000] {
+            let expected = Dataset::generate(pattern, count);
+            let source = Format::Hymeko.encode(&expected).unwrap();
+            let direct = RecordBuilder::decode(&source).unwrap();
+            assert_eq!(direct, expected);
+            if count == 1000 {
+                let original =
+                    Dataset::from_hymeko(parser::parse_description(&source).unwrap()).unwrap();
+                assert!(retained_bytes(&direct) <= retained_bytes(&original));
+                println!(
+                    "RETAINED {pattern:?}: original={} direct={}",
+                    retained_bytes(&original),
+                    retained_bytes(&direct)
+                );
+            }
+        }
+    }
+    let bodies = [
+        "",
+        "value 1;",
+        "text \"a\";",
+        "value 1; text \"a\";",
+        "value 1; value 2; text \"a\";",
+        "value \"bad\"; text 3;",
+        "value 1; text \"a\"; text \"b\";",
+        "value{} text \"a\";",
+        "value 1; text{value 3; text \"b\";}",
+        "child;",
+        "child{}",
+        "@refs{(+a [1],-b [-0.0]);}",
+        "@refs{(+a);}",
+        "@refs{not_an_arc;} value \"bad\";",
+        "@other{(+a);}",
+        "value -0.0; text \"é\\n🙂\"; @refs{(+a [2]);} @refs{(-b [3]);}",
+    ];
+    for name in ["root", "value", "text"] {
+        for body in bodies {
+            for suffix in ["", " @", " \"unfinished", " other;"] {
+                let source = format!("Test{{}} {name}{{{body}}}{suffix}");
+                let original = parser::parse_description(&source)
+                    .map_err(|e| format!("{e:?}"))
+                    .and_then(Dataset::from_hymeko);
+                assert_eq!(RecordBuilder::decode(&source), original, "{source}");
+            }
+        }
+    }
+}
+
+#[test]
+fn custom_builder_and_legacy_token_callers_keep_their_contracts() {
+    use parser::ast::{Description, HyperArc};
+    use parser::builder::{DescriptionInput, EdgeInput, NodeInput, OutputBuilder};
+    use parser::hymeko::{__ToTriple, DescriptionParser, QueryVarParser};
+    use parser::lexer::{
+        Token,
+        simd::{CoreLexer, ScalarLexer},
+    };
+    let empty = Description {
+        name: "Empty",
+        header: Vec::new(),
+        imports: Vec::new(),
+        usings: Vec::new(),
+        consts: Vec::new(),
+        items: Vec::new(),
+    };
+    assert!(empty.items.is_empty());
+    struct Count(usize);
+    impl<'a> OutputBuilder<'a> for Count {
+        type Item = usize;
+        type Output = usize;
+        fn node(&mut self, n: NodeInput<'a, usize>) -> usize {
+            self.0 += 1;
+            1 + n.inner.body.unwrap_or_default().into_iter().sum::<usize>()
+        }
+        fn edge(&mut self, e: EdgeInput<'a, usize>) -> usize {
+            self.0 += 1;
+            10 + e.inner.body.into_iter().sum::<usize>()
+        }
+        fn arc(&mut self, a: HyperArc<'a, &'a str>) -> usize {
+            self.0 += 1;
+            assert_eq!(a.inner.refs.len(), 1);
+            100
+        }
+        fn description(&mut self, d: DescriptionInput<'a, usize>) -> usize {
+            assert_eq!(d.header.2[0].inner.name, "h");
+            d.items.into_iter().sum()
+        }
+    }
+    let source = "Test{h;} root{child; @edge{(+child);}}";
+    let mut builder = Count(0);
+    assert_eq!(
+        parser::parse_description_with(source, &mut builder),
+        Ok(112)
+    );
+    assert_eq!(builder.0, 4);
+    assert_eq!(
+        DescriptionParser::new().parse(ScalarLexer(CoreLexer::new(source))),
+        parser::parse_description(source)
+    );
+    assert_eq!(
+        QueryVarParser::default().parse([(0, Token::Question, 1), (1, Token::Ident("x"), 2)]),
+        Ok("x")
+    );
+    let mut incomplete = Count(0);
+    assert!(parser::parse_description_with("Test{h;} a; b; @", &mut incomplete).is_err());
+    assert!(
+        incomplete.0 > 0,
+        "callbacks before a syntax error are not rolled back"
+    );
+    struct CustomError;
+    impl<'a> __ToTriple<'a> for CustomError {
+        fn to_triple(self) -> Result<(usize, Token<'a>, usize), parser::ParseError<'a>> {
+            Err(parser::ParseError::InvalidToken { location: 17 })
+        }
+    }
+    assert_eq!(
+        DescriptionParser::default().parse([CustomError]),
+        Err(parser::ParseError::InvalidToken { location: 17 })
+    );
+}
+
+#[test]
+fn declaration_reductions_preserve_ast_and_diagnostics() {
+    // Freeze the released frontend's complete Debug representation, including
+    // expected-token sets and byte offsets on every UTF-8-safe truncation.
+    // This oracle is independent of which reductions LALRPOP chooses to emit.
+    let sources = [
+        "Test{} leaf; block{} @edge{} (+leaf);",
+        "Test{header<tag> [1,[-0.0],\"é\\n🙂\"]; const k=2*pi; using a.b as c; @\"é.hk\"->m;} n<one,two>:base,+other { x -> m.y; @e<tag>:~base {(+n,-<pre>m.y<post> [2]);} }",
+        "Test{} a [[],[1,2,],(-2+3*exp(1)),path.to]; @e [1] {(+a [1],-a [2],~a [3],)<tag> 4;} ",
+        "Test{} @outer{n { @inner{ (+n)<a,b> \"text\"; } } (+n);}",
+        "Test{} n:base<before> [2],other, { field<int> -0.0; }",
+        "Test{} n \"árvíz\\n日本語🙂\";",
+    ];
+    let mut digest = blake3::Hasher::new();
+    let mut accepted = 0;
+    let mut rejected = 0;
+    for source in sources {
+        assert!(parser::parse_description(source).is_ok(), "{source}");
+        for end in (0..=source.len()).filter(|&i| source.is_char_boundary(i)) {
+            for suffix in ["", ";", "}", "@", " [", " \"unterminated"] {
+                let input = format!("{}{suffix}", &source[..end]);
+                let result = parser::parse_description(&input);
+                accepted += usize::from(result.is_ok());
+                rejected += usize::from(result.is_err());
+                digest.update(format!("{input:?}\n{result:?}\n").as_bytes());
+            }
+        }
+    }
+    assert!(accepted > 20 && rejected > 1000);
+    assert_eq!(
+        digest.finalize().to_hex().as_str(),
+        "48cb09b9be3d3afe1df9c12b8468f9f8a4f7d644e39b42fc10b60e8c9bf5798d"
+    );
+}
+
+#[test]
 fn owned_ast_strings_transfer_their_allocation() {
     use parser::ast::{HyperItem, Value};
     use std::borrow::Cow;

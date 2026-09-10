@@ -830,5 +830,86 @@ checkpoint and archive its evidence. CPU-profile confirmation is now available.
 Full JSON parity remains open, especially flat and Unicode; this focused campaign
 does not replace unmeasured cases or authorize a claim of full-suite parity.
 
+\paragraph{Iterative block and paged-workspace experiment, 2026-09-11 00:54 +02:00.}
+User requires iterative processing and asks to test a virtual-page workspace.
+Parser owns the optimization. Current fdecc12 matches freshly fetched origin;
+reuse this checkout and preserve inherited gitignore and LaTeX helper changes.
+The prior flat profile attributes 31.3 percent to LR drive and 6.3 percent to
+token conversion. Recognize complete unannotated node blocks containing literal
+number/string leaves with the existing lexer and an iterative loop. Only probe
+item starts after the document header; failed probes restore the lexer checkpoint.
+Pass a compact name/slot token through the generated grammar. A shared scratch pool
+retains field-buffer capacity across reductions, including lexer lookahead; replay
+the existing begin/leaf/item/finish callbacks in their canonical order. Add a
+default-off builder opt-in. No recursive descent, benchmark-specific field names,
+public AST changes, or hidden borrowing in the final owned Dataset are allowed.
+First validate Vec-backed reusable slots; compare against fdecc12 and JSON with
+the stable explicit timing windows. Then isolate a bounded virtual-memory-backed
+scratch implementation using the same field representation, callbacks and inputs.
+Measure native and Windows where supported; retain a portable fallback. Include
+boundary, rollback, callback-order, nested/deep, malformed and AST/error parity
+tests. Keep 180-second/16-GiB cell caps and 10-percent regression thresholds.
+Profile material speedups with Samply and archive all results, including rejected
+variants. ETA: 25 minutes for implementation, discriminating tests and measurements.
+
+\paragraph{Block probe discriminator, 2026-09-11 01:03 +02:00.}
+The Vec-backed prototype improves flat median from about 26.0 to 17.1 ms and
+Unicode by 29 percent, but linked regresses 22 percent. Fresh Samply confirms
+flat LR-drive samples fall from 1061/3609 to 169/3470; linked lexer work grows.
+Distinguish repeated failed prefix probes from general grammar overhead by
+disabling further block speculation after the first unsupported block candidate.
+The failed candidate is rewound and all subsequent syntax remains canonical;
+arc fusion continues. This deliberately bounds speculative replay in heterogeneous
+documents, without field-name or dataset-specific dispatch. Add a mixed-document
+regression test and measure linked/flat before retaining the policy.
+
+\paragraph{Dispatch preservation and storage isolation, 2026-09-11 01:08 +02:00.}
+Bounding failed block probes recovers half the linked loss (100 to 91 ms), but
+the 81.5 ms baseline still wins by over 10 percent. Preserve the original arc
+iterator and generated arc grammar for sources containing a parenthesis; select
+the new block grammar only for sources without one. Both derive from the same
+canonical grammar and share literal-arc recognition. This conservative hint may
+miss block acceleration when a parenthesis occurs inside a string; correctness
+and full-language fallback are unaffected. No benchmark field names are involved.
+The separate virtual-page feature reserves 16 MiB per scratch slot, commits in
+64 KiB chunks, and falls back on exhaustion/allocation failure. The Vec control
+uses the same field limit and interface. The virtual implementation is restricted
+to x86-64 Windows/Linux; other targets retain Vec storage. Windows correctness
+passes after fixing a test-local source/scratch drop-order constraint. Ensure the
+native test invocation uses the current snapshot's tests: the older reusable
+script contained an embedded historical test override, now identified and removed.
+
+\paragraph{Storage decision, 2026-09-11 01:16 +02:00.}
+Reject the virtual-page backend: native flat timings are effectively equal to
+reused Vec buffers, while a clean Windows comparison is 3.37 percent slower on
+flat and 2.18 percent slower on Unicode. The first Windows round overlapped a
+Clippy build and is preserved but explicitly excluded; the replacement comparison
+ran without compilation or profiling. Archive the experimental source and binaries.
+Remove the optional OS mapping code and feature; retain the already measured
+default Vec implementation, bounded scratch fallback, iterative block construction
+and separate arc dispatch. This removes code inactive in the retained measured
+configuration. Verify the final default source on both platforms, Clippy and WASM;
+record a final flat/long-text CPU comparison after compilation completes. No
+compilation overlaps subsequent timing/profile measurements. Publication and
+archive verification are the remaining closure steps; ETA approximately 6 minutes.
+
+
+\paragraph{Final evidence and acceptance boundary, 2026-09-11T01:27+02:00.}
+The retained default passes 37 correctness tests on each platform, Clippy and the
+WASM library check. All 23 final native build/test input files match the checkout;
+production-scale flat, linked and long-text smokes pass. Exact final Windows
+Samply profiles show flat LR-drive exclusive samples falling from 1078/3570 to
+148/3540 and long-text from 488/3376 to 54/3222. Final recording completed after
+its Windows UAC prompt was accepted, with no concurrent compiler.
+The native storage campaign's retained Vec configuration measures flat 17.456 ms
+against baseline 24.457 and JSON 11.215; Unicode 23.680 versus 30.243; long text
+38.781 versus 45.117. Linked is effectively unchanged at 81.191 versus 81.416.
+Nested is 6.39 percent slower. Four controls pass; linked remains inconclusive
+because baseline peak-RSS round drift is 13.44 percent. Preserve this open aggregate
+gate and publish only the performance-branch checkpoint. Full JSON parity and
+master integration remain open. Removing the inactive virtual feature changes
+neither the retained buffer algorithm nor the timing boundary; the final build
+and profile snapshots are recorded separately from the comparison binaries.
+
 \begin{center}\input{plan.tikz}\end{center}
 \end{document}

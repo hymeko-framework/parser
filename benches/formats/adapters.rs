@@ -445,6 +445,10 @@ impl StreamingRecordBuilder {
 }
 
 impl<'a> parser::builder::ConstructionBuilder<'a> for StreamingRecordBuilder {
+    fn fuse_literal_blocks(&self) -> bool {
+        true
+    }
+
     type Item = ();
     type Items = ();
     type Reference = Result<Link, String>;

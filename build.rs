@@ -25,7 +25,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let path = std::path::PathBuf::from(std::env::var_os("OUT_DIR").ok_or("missing OUT_DIR")?)
         .join("fast.lalrpop");
-    std::fs::write(&path, fast)?;
+    std::fs::write(&path, &fast)?;
     lalrpop::Configuration::new().process_file(path)?;
+    fast = fast.replace(
+        "(builder: &mut B)",
+        "(builder: &mut B, scratch: &crate::fusion::Scratch<'a>)",
+    );
+    fast = fast.replace(terminal, &format!("{terminal}\n        FusedBlock => crate::fusion::Token::Block(<crate::fusion::BlockToken<'a>>),"));
+    let block_rule = "NodeDecl: B::Item = {";
+    assert!(fast.contains(block_rule));
+    fast = fast.replace(
+        block_rule,
+        &format!("{block_rule}\n    <block:FusedBlock> => scratch.finish(builder, block),"),
+    );
+    let block_path =
+        std::path::PathBuf::from(std::env::var_os("OUT_DIR").ok_or("missing OUT_DIR")?)
+            .join("blocks.lalrpop");
+    std::fs::write(&block_path, fast)?;
+    lalrpop::Configuration::new().process_file(block_path)?;
+
     Ok(())
 }

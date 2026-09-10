@@ -39,6 +39,13 @@ pub type EdgeInput<'a, Item> = HyperAnnotatedElement<'a, DeclarationBody<'a, Vec
 /// Store consumer errors in `Item`/`Output` if syntax errors must take precedence.
 /// No callback can recover from or bypass a lexer/grammar error.
 pub trait OutputBuilder<'a> {
+    /// Opt into iterative batching of unannotated nodes with literal leaf fields.
+    /// Existing node callbacks and their source order are preserved.
+    /// Mixed syntax may conservatively retain the ordinary parsing path.
+    fn fuse_literal_blocks(&self) -> bool {
+        false
+    }
+
     /// Opt into equivalent batched construction of unannotated literal arcs.
     fn fuse_literal_arcs(&self) -> bool {
         false
@@ -83,6 +90,12 @@ pub struct LiteralReference<'a> {
 /// Consumer-specific validation belongs in the returned items/output; it must
 /// not bypass subsequent grammar validation. Use a fresh builder after failure.
 pub trait ConstructionBuilder<'a> {
+    /// Opt into iterative literal blocks using the existing construction callbacks.
+    /// Mixed syntax may conservatively retain the ordinary parsing path.
+    fn fuse_literal_blocks(&self) -> bool {
+        false
+    }
+
     /// Opt into `literal_arc`; other syntax retains the canonical construction path.
     fn fuse_literal_arcs(&self) -> bool {
         false
@@ -176,6 +189,10 @@ impl<'a> OutputBuilder<'a> for SyntaxValidator {
 }
 
 impl<'a, B: OutputBuilder<'a>> ConstructionBuilder<'a> for B {
+    fn fuse_literal_blocks(&self) -> bool {
+        OutputBuilder::fuse_literal_blocks(self)
+    }
+
     fn fuse_literal_arcs(&self) -> bool {
         OutputBuilder::fuse_literal_arcs(self)
     }

@@ -4,8 +4,13 @@ mod formats;
 use formats::adapters::Format;
 use formats::model::{Dataset, Pattern};
 
-struct FusedAst<const ARCS: bool = true>;
-impl<'a, const ARCS: bool> parser::builder::OutputBuilder<'a> for FusedAst<ARCS> {
+struct FusedAst<const ARCS: bool = true, const BLOCKS: bool = false>;
+impl<'a, const ARCS: bool, const BLOCKS: bool> parser::builder::OutputBuilder<'a>
+    for FusedAst<ARCS, BLOCKS>
+{
+    fn fuse_literal_blocks(&self) -> bool {
+        BLOCKS
+    }
     fn fuse_literal_arcs(&self) -> bool {
         ARCS
     }
@@ -37,6 +42,59 @@ fn output_builder_remains_object_safe() {
         Output = parser::ast::AstStr<'_>,
     > = &mut AstBuilder;
     assert!(!builder.fuse_literal_arcs());
+    assert!(!builder.fuse_literal_blocks());
+}
+
+#[test]
+fn iterative_literal_blocks_preserve_contexts_values_and_diagnostics() {
+    let mixed = "T{} first{x 1;} parent{x 2; child{z 3;}} next{x 4;} @e{(+a[1]);}";
+    assert_eq!(
+        parser::parse_description_with(mixed, &mut FusedAst::<true, true>),
+        parser::parse_description(mixed)
+    );
+    for field in [
+        "",
+        "x 1;",
+        "x -0.0; y \"escaped\\n\\\"\";",
+        "x 1; x 2;",
+        "x<tag> 1;",
+        "x [1];",
+        "x ->a;",
+        "child{}",
+        "@e{}",
+        "x (1+2);",
+        "x 1",
+        "x \"unterminated",
+        "x -;",
+        "x 1; @",
+    ] {
+        for source in [
+            format!("T{{}} n{{{field}}}"),
+            format!("T{{x 1;}} n{{{field}}} next{{z 2;}}"),
+            format!("T{{}} outer{{n{{{field}}} child{{}}}}"),
+            format!("T{{}} @edge{{n{{{field}}}}}"),
+            format!("T{{}} n:base{{{field}}}"),
+            format!("T{{}} n<tag>{{{field}}}"),
+            format!("T{{n{{{field}}}}}"),
+            format!("T{{}} (+a[1]); n{{{field}}} @"),
+        ] {
+            let expected = parser::parse_description(&source);
+            for actual in [
+                parser::parse_description_with(&source, &mut FusedAst::<false, true>),
+                parser::parse_description_with(&source, &mut FusedAst::<true, true>),
+            ] {
+                assert_eq!(actual, expected, "{source}");
+            }
+        }
+    }
+    for count in [1, 2, 3, 257, 4096] {
+        let fields = (0..count).map(|i| format!("f{i} {i};")).collect::<String>();
+        let source = format!("T{{}} n{{{fields}}} next{{text \"ok\";}}");
+        assert_eq!(
+            parser::parse_description_with(&source, &mut FusedAst::<true, true>),
+            parser::parse_description(&source)
+        );
+    }
 }
 
 #[test]
@@ -49,7 +107,12 @@ fn canonical_error_validation_does_not_replay_builder_callbacks() {
         fn fuse_literal_arcs(&self) -> bool {
             true
         }
-        fn node(&mut self, _: NodeInput<'a, ()>) {}
+        fn fuse_literal_blocks(&self) -> bool {
+            true
+        }
+        fn node(&mut self, _: NodeInput<'a, ()>) {
+            self.0 += 1;
+        }
         fn edge(&mut self, _: EdgeInput<'a, ()>) {}
         fn arc(&mut self, _: parser::ast::HyperArc<'a, &'a str>) {
             self.0 += 1;
@@ -61,6 +124,11 @@ fn canonical_error_validation_does_not_replay_builder_callbacks() {
     let actual = parser::parse_description_with(source, &mut builder).unwrap_err();
     assert_eq!(actual, parser::parse_description(source).unwrap_err());
     assert_eq!(builder.0, 1);
+    let source = "T{} n{x 1;} @";
+    let mut builder = Arcs(0);
+    let actual = parser::parse_description_with(source, &mut builder).unwrap_err();
+    assert_eq!(actual, parser::parse_description(source).unwrap_err());
+    assert_eq!(builder.0, 2, "one leaf and one node, without callback replay");
 }
 
 #[test]
@@ -151,6 +219,9 @@ fn incremental_construction_preserves_scope_order_and_deep_inputs() {
     #[derive(Default)]
     struct Counter(Vec<String>);
     impl<'a> ConstructionBuilder<'a> for Counter {
+        fn fuse_literal_blocks(&self) -> bool {
+            true
+        }
         fn fuse_literal_arcs(&self) -> bool {
             true
         }

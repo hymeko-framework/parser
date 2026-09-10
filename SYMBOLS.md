@@ -13,7 +13,7 @@ Extracted by grammar -- tree-sitter for Rust and C++, `ast` for Python -- so tha
 `pub(crate)`, a `pub fn` inside a private `mod`, and a `def` written inside a
 docstring are all excluded for a stated reason rather than by luck.
 
-**2 package(s), 70 public symbol(s).**
+**2 package(s), 75 public symbol(s).**
 
 ## parser (rust)
 
@@ -75,14 +75,17 @@ docstring are all excluded for a stated reason rather than by luck.
 
 ### functions
 
+- `as_ptr` — `src/fusion/workspace.rs`
+- `clear` — `src/fusion/workspace.rs`
 - `decode` — `benches/formats/adapters.rs`
 - `document` — `benches/formats/adapters.rs`
 - `encode` — `benches/formats/adapters.rs`
 - `from_hymeko` — `benches/formats/adapters.rs`
 - `generate` — `benches/formats/model.rs`
+- `is_empty` — `src/fusion/workspace.rs`
+- `iter_mut` — `src/fusion/workspace.rs`
 - `name` — `benches/formats/adapters.rs`
 - `name` — `benches/formats/model.rs`
-- `new` — `src/fusion.rs`
 - `new` — `src/lexer/simd.rs`
 - `new` — `src/lexer/simple.rs`
 - `next_token` — `src/lexer/common.rs`
@@ -95,7 +98,9 @@ docstring are all excluded for a stated reason rather than by luck.
 - `prepare` — `benches/formats/mod.rs`
 - `read_source_file` — `src/lib.rs`
 - `records` — `benches/formats/model.rs`
+- `try_push` — `src/fusion/workspace.rs`
 - `validate` — `benches/formats/model.rs`
+- `with_blocks` — `src/fusion.rs`
 
 ## scripts (python)
 

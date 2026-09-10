@@ -28,6 +28,11 @@ mod fast_grammar {
     include!(concat!(env!("OUT_DIR"), "/fast.rs"));
 }
 
+#[allow(clippy::all, dead_code, unused_imports)]
+mod block_grammar {
+    include!(concat!(env!("OUT_DIR"), "/blocks.rs"));
+}
+
 /// Compatibility facades for callers supplying their own token iterator.
 pub mod hymeko {
     use crate::{ParseError, ast::AstStr, builder::AstBuilder, grammar, lexer::Token};
@@ -120,10 +125,25 @@ where
     I: Iterator<Item = SpannedLexItem<'a>> + lexer::common::CommonLexer<'a>,
     B: ConstructionBuilder<'a>,
 {
-    if !builder.fuse_literal_arcs() || !fusion::contains_arc_start(input.as_bytes()) {
+    let blocks = builder.fuse_literal_blocks();
+    let arcs = builder.fuse_literal_arcs();
+    if !blocks && !arcs {
         return grammar::DescriptionParser::new().parse(builder, iter);
     }
-    match fast_grammar::DescriptionParser::new().parse(builder, fusion::Fuser::new(iter)) {
+    let has_arc_start = fusion::contains_arc_start(input.as_bytes());
+    let result = if blocks && !has_arc_start {
+        let scratch = fusion::Scratch::default();
+        block_grammar::DescriptionParser::new().parse(
+            builder,
+            &scratch,
+            fusion::Fuser::with_blocks(iter, false, true, &scratch),
+        )
+    } else if arcs && has_arc_start {
+        fast_grammar::DescriptionParser::new().parse(builder, fusion::ArcFuser(iter))
+    } else {
+        return grammar::DescriptionParser::new().parse(builder, iter);
+    };
+    match result {
         Ok(output) => Ok(output),
         Err(_) => Err(grammar::DescriptionParser::new()
             .parse(

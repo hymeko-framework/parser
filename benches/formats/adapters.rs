@@ -227,7 +227,10 @@ impl Link {
 
 /// Benchmark consumer of the production generic parser; no separate grammar.
 #[cfg(test)]
-#[allow(dead_code, reason = "Compatibility oracle used by integration tests, also compiled by Clippy for the benchmark")]
+#[allow(
+    dead_code,
+    reason = "Compatibility oracle used by integration tests, also compiled by Clippy for the benchmark"
+)]
 pub struct RecordBuilder;
 
 pub enum BuiltItem<'a> {
@@ -235,7 +238,10 @@ pub enum BuiltItem<'a> {
     Node(&'a str, Result<Record, String>),
     Edge(&'a str, Result<Vec<Link>, String>),
     #[cfg(test)]
-    #[allow(dead_code, reason = "Compatibility oracle payload; streaming construction emits arcs directly")]
+    #[allow(
+        dead_code,
+        reason = "Compatibility oracle payload; streaming construction emits arcs directly"
+    )]
     Arc(Result<Vec<Link>, String>),
     UnexpectedArc,
 }
@@ -251,7 +257,10 @@ impl BuiltItem<'_> {
 }
 
 #[cfg(test)]
-#[allow(dead_code, reason = "Compatibility oracle used by integration tests, also compiled by Clippy for the benchmark")]
+#[allow(
+    dead_code,
+    reason = "Compatibility oracle used by integration tests, also compiled by Clippy for the benchmark"
+)]
 impl RecordBuilder {
     pub fn decode(source: &str) -> Result<Dataset, String> {
         parser::parse_description_with(source, &mut Self).map_err(|e| format!("{e:?}"))?
@@ -443,6 +452,26 @@ impl<'a> parser::builder::ConstructionBuilder<'a> for StreamingRecordBuilder {
     type Block = &'a str;
     type Output = Result<Dataset, String>;
 
+    fn fuse_literal_arcs(&self) -> bool {
+        true
+    }
+
+    fn literal_arc(&mut self, refs: Vec<parser::builder::LiteralReference<'a>>) {
+        if let Some(RecordScope::Edge(Ok(output))) = self.scopes.last_mut() {
+            let links: Vec<Link> = refs
+                .into_iter()
+                .map(|r| Link {
+                    target: r.target.into(),
+                    sign: r.sign,
+                    weight: r.weight,
+                })
+                .collect();
+            Link::append_owned(output, links);
+        } else if !matches!(self.scopes.last(), Some(RecordScope::Edge(_))) {
+            self.accept(BuiltItem::UnexpectedArc);
+        }
+    }
+
     fn begin_node(
         &mut self,
         name: &'a str,
@@ -550,5 +579,46 @@ impl<'a> parser::builder::ConstructionBuilder<'a> for StreamingRecordBuilder {
             node.shrink_to_fit();
             Dataset { node }
         })
+    }
+}
+
+#[cfg(test)]
+mod literal_arc_tests {
+    #[test]
+    fn literal_arcs_reuse_compact_buffers_and_bound_retained_slack() {
+        use super::*;
+        use parser::builder::{ConstructionBuilder, LiteralReference};
+        for count in [1, 2, 8, 257] {
+            for slack in [0, 16] {
+                let mut refs = Vec::with_capacity(count + slack);
+                refs.extend((0..count).map(|_| LiteralReference {
+                    target: "target",
+                    target_offset: 0,
+                    sign: -1,
+                    weight: -0.0,
+                }));
+                let pointer = refs.as_ptr().cast::<u8>();
+                let mut builder = StreamingRecordBuilder {
+                    scopes: vec![RecordScope::Edge(Ok(Vec::new()))],
+                };
+                builder.literal_arc(refs);
+                let RecordScope::Edge(Ok(links)) = &builder.scopes[0] else {
+                    panic!("links")
+                };
+                assert_eq!(links.len(), count);
+                assert!(links.capacity() <= count.max(4));
+                if slack == 0
+                    && std::mem::size_of::<LiteralReference>() == std::mem::size_of::<Link>()
+                    && std::mem::align_of::<LiteralReference>() == std::mem::align_of::<Link>()
+                {
+                    assert_eq!(links.as_ptr().cast::<u8>(), pointer);
+                }
+                for link in links {
+                    assert_eq!(link.target, "target");
+                    assert_eq!(link.sign, -1);
+                    assert_eq!(link.weight.to_bits(), (-0.0f64).to_bits());
+                }
+            }
+        }
     }
 }

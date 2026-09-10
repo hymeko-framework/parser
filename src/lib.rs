@@ -9,6 +9,7 @@
 
 pub mod ast;
 pub mod builder;
+mod fusion;
 pub mod lexer;
 
 // LALRPOP-generated parser. We expand what `lalrpop_mod!(pub hymeko)` does
@@ -20,6 +21,11 @@ pub mod lexer;
 #[allow(clippy::all, dead_code, unused_imports)]
 mod grammar {
     include!(concat!(env!("OUT_DIR"), "/hymeko.rs"));
+}
+
+#[allow(clippy::all, dead_code, unused_imports)]
+mod fast_grammar {
+    include!(concat!(env!("OUT_DIR"), "/fast.rs"));
 }
 
 /// Compatibility facades for callers supplying their own token iterator.
@@ -105,12 +111,27 @@ pub type ParseError<'a> = lalrpop_util::ParseError<usize, Token<'a>, LexError>;
 /// Generic boundary — the compiler instantiates one optimized copy per lexer
 /// tier (scalar / SSE2 / AVX2) so the SIMD dispatch stays monomorphic.
 #[inline(always)]
-fn parse_description_inner<'a, I, B>(iter: I, builder: &mut B) -> Result<B::Output, ParseError<'a>>
+fn parse_description_inner<'a, I, B>(
+    iter: I,
+    input: &'a str,
+    builder: &mut B,
+) -> Result<B::Output, ParseError<'a>>
 where
-    I: Iterator<Item = SpannedLexItem<'a>>,
+    I: Iterator<Item = SpannedLexItem<'a>> + lexer::common::CommonLexer<'a>,
     B: ConstructionBuilder<'a>,
 {
-    grammar::DescriptionParser::new().parse(builder, iter)
+    if !builder.fuse_literal_arcs() || !input.as_bytes().contains(&b'(') {
+        return grammar::DescriptionParser::new().parse(builder, iter);
+    }
+    match fast_grammar::DescriptionParser::new().parse(builder, fusion::Fuser::new(iter)) {
+        Ok(output) => Ok(output),
+        Err(_) => Err(grammar::DescriptionParser::new()
+            .parse(
+                &mut builder::SyntaxValidator,
+                ScalarLexer(CoreLexer::new(input)),
+            )
+            .expect_err("token fusion preserves grammar acceptance")),
+    }
 }
 
 /// Parse a full `.hymeko` source into its AST, picking the best available
@@ -151,14 +172,14 @@ pub fn parse_description_into<'a, B: ConstructionBuilder<'a>>(
     #[cfg(target_arch = "x86_64")]
     {
         if std::is_x86_feature_detected!("avx2") {
-            return parse_description_inner(Avx2Lexer(core), builder);
+            return parse_description_inner(Avx2Lexer(core), input, builder);
         }
         if std::is_x86_feature_detected!("sse2") {
-            return parse_description_inner(Sse2Lexer(core), builder);
+            return parse_description_inner(Sse2Lexer(core), input, builder);
         }
     }
 
-    parse_description_inner(ScalarLexer(core), builder)
+    parse_description_inner(ScalarLexer(core), input, builder)
 }
 
 // ---- Query-variable fragment ---------------------------------------------

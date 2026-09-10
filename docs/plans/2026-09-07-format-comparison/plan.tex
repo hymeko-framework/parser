@@ -664,5 +664,119 @@ Archive reports, raw source/binary provenance, samples, plots and flamegraphs
 under the existing review branch with the shared task-close command. No consumer
 pins or master integration change.
 
+\paragraph{Literal-reference transition fusion, 2026-09-10 22:47 +02:00.}
+The e4f45b2 checkpoint is published and its reports archived; JSON parity remains
+open. Next bounded probe: fuse the language-level token sequence signed identifier
+plus a singleton numeric weight list into one private parser terminal. This is
+independent of record field names or the benchmark schema. The original public
+Token enum and lexer interfaces remain unchanged. A private iterator buffers at
+most five lookahead tokens; mismatches and lexical errors replay their original
+order. The fast table grammar is generated from the canonical grammar with one
+language-equivalent SignedRef alternative. Preserve canonical diagnostics through
+unit-output validation on fast-parser errors, never replaying consumer callbacks.
+A default ConstructionBuilder scalar-reference callback reconstructs the canonical
+syntax; consumers may construct directly from the literal fields. No recursion,
+stack-limit change, dependency, weakened input or altered timing boundary.
+Scope: build.rs, new private src/fusion.rs, src/lib.rs, src/builder.rs, benchmark
+adapter, existing tests and plan/report. Test expansion equivalence across token
+prefixes, signs, negative zero, comments, malformed/partial lists, tags and paths;
+frozen AST/errors and deep/builder parity must pass before native timing. Preserve
+lookahead errors and every original span in the unfused path. Initially measure
+linked 50k and flat/Unicode controls against e4f45b2 under existing caps. ETA: 30
+minutes for this bounded candidate, not a promise of complete JSON parity.
+
+\paragraph{Whole-arc construction probe, 2026-09-10 23:03 +02:00.}
+Reject per-reference token fusion: linked improves 19 percent, but flat and Unicode
+regress 18--23 percent. Its Windows profile launch exceeded 60 seconds; the precise
+extra-cost attribution remains unresolved. Do not retain that path by relaxing gates.
+Probe complete unannotated arcs containing only signed singleton identifier paths
+and singleton numeric weight lists. The lexer already exposes a position checkpoint;
+use it to roll back a failed recognition without buffering every input token. Only
+recognized literal records are held; common non-parenthesis tokens do not need a queue.
+Use a default-off construction capability: ordinary OutputBuilder/AST parsing remains
+canonical. A typed consumer may opt into the batched callback. Carry identifier byte
+offsets in a public literal-reference input, preserving borrowed identifiers. The record
+consumer can convert that vector in place to final links; assert buffer reuse and output
+semantics. Full grammar and canonical diagnostics remain authoritative. Whole-arc
+recognition is a language fragment, independent of record field names and fixtures.
+Check malformed tails and lexer rollback, canonical AST equivalence via an opt-in AST
+adapter, large reference groups, metadata and negative zero before native smoke/focus.
+No new dependency or lexer public API change. This replaces the rejected reference
+prototype; it is not layered on its regressing pending-token adapter.
+
+\paragraph{Absent-arc dispatch probe, 2026-09-10 23:12 +02:00.}
+The whole-arc path halves linked latency, but flat/Unicode regress 15--19 percent.
+Test a necessary-syntax precondition before selecting that path: a source without
+an opening parenthesis cannot contain an arc. A byte search selects the canonical
+parser in that case. Parentheses inside strings/comments can cause false positives
+but never skip possible arcs. No fixture names, sizes or record schema enter dispatch.
+The discriminating controls separate the alternative parser path from common work;
+profile the linked improvement before retaining it. Reuse the same three-cell focus.
+
+\paragraph{Literal-leaf reduction probe, 2026-09-10 23:16 +02:00.}
+The absent-arc dispatch passes all three gates and reaches linked JSON parity.
+Flat/Unicode still spend roughly twice the JSON time. The preceding symbolized
+profiles identify LR driver/reduction work as hot. Extend the same private token
+recognizer to complete tag-free leaf statements with numeric or string literals.
+Use a small private number/string enum, preserving lexer-owned Cow strings and
+negative-zero bits; do not add a new public output type or an allocation per leaf.
+Generate the NodeDecl alternative from the canonical grammar. Roll back every
+failed prefix to the lexer checkpoint; paths, tags and expressions remain canonical.
+Keep arc and leaf recognition independently declared consumer capabilities, with
+both default off. Test opt-in AST/errors, malformed tails and ownership. Focus
+flat, Unicode and linked against the same baseline; do not weaken regression caps.
+Windows Samply currently waits for its elevated helper and times out before
+recording; native perf is restricted and sudo is unavailable. Profile confirmation
+remains pending, distinct from successful Criterion timings.
+
+\paragraph{Compact token and object-safety check, 2026-09-10 23:26 +02:00.}
+The full arc campaign passes all 50k gates, but the absent-parenthesis pre-scan
+adds 8.4 percent on long text. The small flat RSS control is inconclusive.
+Test the representation hypothesis: nesting the original token in Plain adds an
+extra enum discriminant. Generate a flat private token enum and exhaustive conversion
+from the existing grammar's token mappings; public tokens and AST remain unchanged.
+Include EOF explicitly if absent from grammar mappings. Assert token sizes and lossless
+conversion; test all parser diagnostics. Remove the pre-scan for this discriminator.
+Change the public opt-in constant to a default method: associated constants would
+break existing dyn OutputBuilder users. Add a trait-object compile/use regression.
+Rebuild and measure the affected controls and linked case before deciding whether
+the representation change is useful. No profiler privilege workaround is authorized;
+Windows helper approval remains pending. ETA: 10 minutes for this bounded validation.
+
+\paragraph{Token layout discriminator, 2026-09-10 23:28 +02:00.}
+The layout assertion disproved the initial expectation: public tokens are 24 bytes,
+and even a flat enum with a Vec arc payload is 32 bytes. Test a boxed slice payload
+(16 bytes) to preserve the original enum's compact layout. Convert the recognized
+Vec into a boxed slice and back at the callback boundary; exact-capacity groups
+reuse their buffer, while slack is compacted. No public callback type changes.
+The layout assertion remains the discriminator, not a waived test.
+
+\paragraph{Retained candidate and open gate, 2026-09-10 23:34 +02:00.}
+Reject compact tokens: flat 50k RSS increases from 18.82 to 20.73 MiB, crossing
+the unchanged 10 percent gate. Reject leaf fusion: no material additional gain.
+Retain whole-arc construction with the absent-parenthesis dispatch, whose earlier
+full campaign passed all 50k cells. Use the object-safe default method
+\texttt{fuse\_literal\_arcs()} for consumer opt-in; rerun the matched campaign on
+that final source. Default AST and custom-token entry points remain canonical.
+The callback receives a complete tag-free literal arc; source offsets and all
+original syntax remain available, and malformed syntax uses canonical diagnostics
+without replaying consumer callbacks. Correctness includes 1024 nesting depth,
+4096-reference groups, callback counts, buffer reuse, and dyn OutputBuilder.
+No new dependencies or benchmark execution defaults are introduced. Source changes
+remain on the existing performance branch; master and consumer pins are unchanged.
+This is a measured candidate, not a declaration of full JSON parity or a completed
+profile gate: the Windows helper still needs UAC approval. Preserve all rejected
+measurements and archive them with the existing report before handoff.
+
+\paragraph{Exact-source result, 2026-09-10 23:39 +02:00.}
+The object-safe candidate passes 33 correctness tests on both Windows and Linux,
+Clippy and the WASM library check. Linked owned records measure 83.988 ms against
+JSON 85.123 ms (baseline 203.542 ms). Flat, Unicode and nested remain slower than
+JSON. Four record and both AST 50k A/B gates pass; long text is inconclusive with
+16.26 percent relative IQR and a 10.4 percent slower point estimate. Flat 1k is
+inconclusive because of RSS drift. The aggregate gate and CPU-profile gate remain
+open; this checkpoint is not accepted for master integration. Evidence and rejected
+probes are in the existing format-comparison report and shared Samba archive.
+
 \begin{center}\input{plan.tikz}\end{center}
 \end{document}

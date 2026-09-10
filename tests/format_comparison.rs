@@ -4,6 +4,146 @@ mod formats;
 use formats::adapters::Format;
 use formats::model::{Dataset, Pattern};
 
+struct FusedAst<const ARCS: bool = true>;
+impl<'a, const ARCS: bool> parser::builder::OutputBuilder<'a> for FusedAst<ARCS> {
+    fn fuse_literal_arcs(&self) -> bool {
+        ARCS
+    }
+    type Item = parser::ast::HyperItem<'a, &'a str>;
+    type Output = parser::ast::AstStr<'a>;
+    fn node(&mut self, node: parser::builder::NodeInput<'a, Self::Item>) -> Self::Item {
+        parser::builder::AstBuilder.node(node)
+    }
+    fn edge(&mut self, edge: parser::builder::EdgeInput<'a, Self::Item>) -> Self::Item {
+        parser::builder::AstBuilder.edge(edge)
+    }
+    fn arc(&mut self, arc: parser::ast::HyperArc<'a, &'a str>) -> Self::Item {
+        parser::builder::AstBuilder.arc(arc)
+    }
+    fn description(
+        &mut self,
+        input: parser::builder::DescriptionInput<'a, Self::Item>,
+    ) -> Self::Output {
+        parser::builder::AstBuilder.description(input)
+    }
+}
+
+#[test]
+fn output_builder_remains_object_safe() {
+    use parser::builder::{AstBuilder, OutputBuilder};
+    let builder: &mut dyn OutputBuilder<
+        '_,
+        Item = parser::ast::HyperItem<'_, &str>,
+        Output = parser::ast::AstStr<'_>,
+    > = &mut AstBuilder;
+    assert!(!builder.fuse_literal_arcs());
+}
+
+#[test]
+fn canonical_error_validation_does_not_replay_builder_callbacks() {
+    use parser::builder::{DescriptionInput, EdgeInput, NodeInput, OutputBuilder};
+    struct Arcs(usize);
+    impl<'a> OutputBuilder<'a> for Arcs {
+        type Item = ();
+        type Output = ();
+        fn fuse_literal_arcs(&self) -> bool {
+            true
+        }
+        fn node(&mut self, _: NodeInput<'a, ()>) {}
+        fn edge(&mut self, _: EdgeInput<'a, ()>) {}
+        fn arc(&mut self, _: parser::ast::HyperArc<'a, &'a str>) {
+            self.0 += 1;
+        }
+        fn description(&mut self, _: DescriptionInput<'a, ()>) {}
+    }
+    let source = "T{} (+a[1]); @";
+    let mut builder = Arcs(0);
+    let actual = parser::parse_description_with(source, &mut builder).unwrap_err();
+    assert_eq!(actual, parser::parse_description(source).unwrap_err());
+    assert_eq!(builder.0, 1);
+}
+
+#[test]
+fn fused_reference_shapes_match_canonical_ast_and_errors() {
+    use parser::hymeko::DescriptionParser;
+    use parser::lexer::simd::{CoreLexer, ScalarLexer};
+    for sign in ["+", "-", "~"] {
+        for path in ["a", "a.b", "<tag>a", "a<tag>"] {
+            for weight in [
+                "[1]", "[-0.0]", "[1,]", "[1,2]", "[]", "[[1]]", "[\"x\"]", "[", "[-", "[1",
+            ] {
+                let reference = format!("{sign}{path} /*gap*/ {weight}");
+                for source in [
+                    format!("T{{}} ({reference});"),
+                    format!("T{{}} n:{reference}{{}}"),
+                    format!("T{{}} n{{ @e{{({reference});}} }}"),
+                    format!("T{{const x=(1{reference});}}"),
+                    format!("T{{}} ({reference},+b[2]); @"),
+                ] {
+                    let expected =
+                        DescriptionParser::new().parse(ScalarLexer(CoreLexer::new(&source)));
+                    assert_eq!(
+                        parser::parse_description_with(&source, &mut FusedAst::<true>),
+                        expected,
+                        "{source}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn fused_arc_large_groups_and_malformed_tails_match_canonical() {
+    for count in [1, 2, 8, 257, 4096] {
+        let refs = (0..count)
+            .map(|i| format!("+n{i}[1]"))
+            .collect::<Vec<_>>()
+            .join(",");
+        for suffix in [");", ",);", ")<tag>;", ",+bad[", ",+bad[1]@);", "); @"] {
+            let source = format!("T{{}} @links{{({refs}{suffix}}}");
+            assert_eq!(
+                parser::parse_description_with(&source, &mut FusedAst::<true>),
+                parser::parse_description(&source),
+                "count={count}, suffix={suffix}"
+            );
+        }
+    }
+}
+
+#[test]
+fn arc_opt_in_preserves_other_syntax_and_can_be_disabled() {
+    for value in [
+        "1",
+        "-0.0",
+        "-3.5",
+        "1+2",
+        "(1+2)",
+        "[1]",
+        "\"plain\"",
+        "\"escaped\\n\\\"\"",
+        "\"unterminated",
+        "true",
+        "?query",
+        "->target",
+    ] {
+        for tags in ["", "<tag>", "<tag,tag>"] {
+            for suffix in [";", "; @", "{}", "; child;", "; (+child[1]);"] {
+                let source = format!("T{{}} leaf {tags} {value}{suffix}");
+                let expected = parser::parse_description(&source);
+                assert_eq!(
+                    parser::parse_description_with(&source, &mut FusedAst::<false>),
+                    expected
+                );
+                assert_eq!(
+                    parser::parse_description_with(&source, &mut FusedAst::<true>),
+                    expected
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn incremental_construction_preserves_scope_order_and_deep_inputs() {
     use parser::ast::{Anno, HeaderBlock, SignedRef};
@@ -11,6 +151,9 @@ fn incremental_construction_preserves_scope_order_and_deep_inputs() {
     #[derive(Default)]
     struct Counter(Vec<String>);
     impl<'a> ConstructionBuilder<'a> for Counter {
+        fn fuse_literal_arcs(&self) -> bool {
+            true
+        }
         type Item = usize;
         type Items = usize;
         type Reference = SignedRef<'a, &'a str>;
@@ -415,6 +558,10 @@ fn declaration_reductions_preserve_ast_and_diagnostics() {
             for suffix in ["", ";", "}", "@", " [", " \"unterminated"] {
                 let input = format!("{}{suffix}", &source[..end]);
                 let result = parser::parse_description(&input);
+                assert_eq!(
+                    parser::parse_description_with(&input, &mut FusedAst::<true>),
+                    result
+                );
                 accepted += usize::from(result.is_ok());
                 rejected += usize::from(result.is_err());
                 digest.update(format!("{input:?}\n{result:?}\n").as_bytes());

@@ -13,7 +13,7 @@ Extracted by grammar -- tree-sitter for Rust and C++, `ast` for Python -- so tha
 `pub(crate)`, a `pub fn` inside a private `mod`, and a `def` written inside a
 docstring are all excluded for a stated reason rather than by luck.
 
-**2 package(s), 68 public symbol(s).**
+**2 package(s), 70 public symbol(s).**
 
 ## parser (rust)
 
@@ -48,6 +48,7 @@ docstring are all excluded for a stated reason rather than by luck.
 - `LexError` — `src/lexer/token.rs`
 - `Lexer` — `src/lexer/simple.rs`
 - `Link` — `benches/formats/model.rs`
+- `LiteralReference` — `src/builder.rs`
 - `NodeInner` — `src/ast.rs`
 - `QueryVarParser` — `src/lib.rs`
 - `Record` — `benches/formats/model.rs`
@@ -81,6 +82,7 @@ docstring are all excluded for a stated reason rather than by luck.
 - `generate` — `benches/formats/model.rs`
 - `name` — `benches/formats/adapters.rs`
 - `name` — `benches/formats/model.rs`
+- `new` — `src/fusion.rs`
 - `new` — `src/lexer/simd.rs`
 - `new` — `src/lexer/simple.rs`
 - `next_token` — `src/lexer/common.rs`

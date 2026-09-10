@@ -39,6 +39,11 @@ pub type EdgeInput<'a, Item> = HyperAnnotatedElement<'a, DeclarationBody<'a, Vec
 /// Store consumer errors in `Item`/`Output` if syntax errors must take precedence.
 /// No callback can recover from or bypass a lexer/grammar error.
 pub trait OutputBuilder<'a> {
+    /// Opt into equivalent batched construction of unannotated literal arcs.
+    fn fuse_literal_arcs(&self) -> bool {
+        false
+    }
+
     type Item;
     type Output;
 
@@ -46,6 +51,17 @@ pub trait OutputBuilder<'a> {
     fn edge(&mut self, edge: EdgeInput<'a, Self::Item>) -> Self::Item;
     fn arc(&mut self, arc: HyperArc<'a, &'a str>) -> Self::Item;
     fn description(&mut self, description: DescriptionInput<'a, Self::Item>) -> Self::Output;
+}
+
+/// A tag-free, single-identifier reference with a singleton numeric weight list.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiteralReference<'a> {
+    pub target: &'a str,
+    /// Identifier start in the original UTF-8 source, in bytes.
+    pub target_offset: usize,
+    /// One of -1, 0 or 1.
+    pub sign: i8,
+    pub weight: f64,
 }
 
 /// Incremental construction for consumers that do not need intermediate item lists.
@@ -67,12 +83,45 @@ pub trait OutputBuilder<'a> {
 /// Consumer-specific validation belongs in the returned items/output; it must
 /// not bypass subsequent grammar validation. Use a fresh builder after failure.
 pub trait ConstructionBuilder<'a> {
+    /// Opt into `literal_arc`; other syntax retains the canonical construction path.
+    fn fuse_literal_arcs(&self) -> bool {
+        false
+    }
+
     type Item;
     type Items;
     type Reference;
     type Path;
     type Block;
     type Output;
+
+    /// Equivalent to individual reference construction followed by an unannotated arc.
+    /// Called only when `fuse_literal_arcs()` is true. Source order is preserved.
+    fn literal_arc(&mut self, literals: Vec<LiteralReference<'a>>) -> Self::Item {
+        let refs = literals
+            .into_iter()
+            .map(|literal| {
+                let path = self.path(literal.target);
+                self.finish_reference(
+                    literal.sign,
+                    path,
+                    crate::ast::Anno {
+                        tags: Vec::new(),
+                        value: Some(crate::ast::Value::List(vec![crate::ast::Value::Num(
+                            literal.weight,
+                        )])),
+                    },
+                )
+            })
+            .collect();
+        self.finish_arc(
+            crate::ast::Anno {
+                tags: Vec::new(),
+                value: None,
+            },
+            refs,
+        )
+    }
 
     fn begin_node(
         &mut self,
@@ -115,7 +164,21 @@ pub trait ConstructionBuilder<'a> {
     ) -> Self::Output;
 }
 
+/// Error-only canonical validation without replaying consumer callbacks.
+pub(crate) struct SyntaxValidator;
+impl<'a> OutputBuilder<'a> for SyntaxValidator {
+    type Item = ();
+    type Output = ();
+    fn node(&mut self, _: NodeInput<'a, ()>) {}
+    fn edge(&mut self, _: EdgeInput<'a, ()>) {}
+    fn arc(&mut self, _: HyperArc<'a, &'a str>) {}
+    fn description(&mut self, _: DescriptionInput<'a, ()>) {}
+}
+
 impl<'a, B: OutputBuilder<'a>> ConstructionBuilder<'a> for B {
+    fn fuse_literal_arcs(&self) -> bool {
+        OutputBuilder::fuse_literal_arcs(self)
+    }
     type Item = B::Item;
     type Items = Vec<B::Item>;
     type Reference = SignedRef<'a, &'a str>;

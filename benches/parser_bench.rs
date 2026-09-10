@@ -37,7 +37,7 @@ fn gen_dense(nodes: usize) -> String {
         s.push_str(&format!(
             "  node_{i}: base_type {{\n\
              \x20\x20\x20\x20mass {i}.0;\n\
-             \x20\x20\x20\x20@edge_{i} {{ (+node_{i}, [{i}.5] -node_{next}); }}\n\
+             \x20\x20\x20\x20@edge_{i} {{ (+node_{i} [{i}.5], -node_{next}); }}\n\
              \x20\x20}}\n"
         ));
     }
@@ -92,8 +92,8 @@ fn gen_robot_like(joints: usize) -> String {
         s.push_str(&format!(
             "  link_{i}: link {{ mass {}.0; }}\n\
              \x20\x20@joint_{i}: rev_joint {{\n\
-             \x20\x20\x20\x20+base_link, [[0.{i}, 0.0, 0.05], [-90.0, 0.0, 0.0]] -link_{i},\n\
-             \x20\x20\x20\x20-AXIS_Z\n\
+             \x20\x20\x20\x20(+base_link [[0.{i}, 0.0, 0.05], [-90.0, 0.0, 0.0]], -link_{i},\n\
+             \x20\x20\x20\x20-AXIS_Z);\n\
              \x20\x20}}\n",
             i + 1,
         ));
@@ -188,7 +188,9 @@ fn bench_input_patterns(c: &mut Criterion) {
         // Full parse (lex + AST)
         group.bench_with_input(BenchmarkId::new("parse", name), input, |b, input| {
             b.iter(|| {
-                let _ = black_box(parse_description(black_box(input)));
+                let _ = black_box(
+                    parse_description(black_box(input)).expect("benchmark source must parse"),
+                );
             })
         });
     }
@@ -209,7 +211,9 @@ fn bench_scaling(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(input.len() as u64));
         group.bench_with_input(BenchmarkId::from_parameter(n), &input, |b, input| {
             b.iter(|| {
-                let _ = black_box(parse_description(black_box(input)));
+                let _ = black_box(
+                    parse_description(black_box(input)).expect("benchmark source must parse"),
+                );
             })
         });
     }
@@ -232,7 +236,9 @@ fn bench_micro(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(ws_input.len() as u64));
     group.bench_function("skip_1mb_whitespace", |b| {
         b.iter(|| {
-            let _ = black_box(parse_description(black_box(&ws_input)));
+            let _ = black_box(
+                parse_description(black_box(&ws_input)).expect("benchmark source must parse"),
+            );
         })
     });
 
@@ -241,7 +247,9 @@ fn bench_micro(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(long_id.len() as u64));
     group.bench_function("scan_100k_ident", |b| {
         b.iter(|| {
-            let _ = black_box(parse_description(black_box(&long_id)));
+            let _ = black_box(
+                parse_description(black_box(&long_id)).expect("benchmark source must parse"),
+            );
         })
     });
 
@@ -257,7 +265,9 @@ fn bench_micro(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(many_tokens.len() as u64));
     group.bench_function("many_small_tokens", |b| {
         b.iter(|| {
-            let _ = black_box(parse_description(black_box(&many_tokens)));
+            let _ = black_box(
+                parse_description(black_box(&many_tokens)).expect("benchmark source must parse"),
+            );
         })
     });
 
@@ -272,3 +282,16 @@ criterion_group!(
     bench_micro,
 );
 criterion_main!(benches);
+
+#[test]
+fn benchmark_inputs_are_successful() {
+    for (name, input) in [
+        ("dense", gen_dense(17)),
+        ("whitespace", gen_whitespace_heavy(17)),
+        ("comments", gen_comment_heavy(17)),
+        ("identifiers", gen_long_idents(17)),
+        ("robot", gen_robot_like(17)),
+    ] {
+        parse_description(&input).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+    }
+}

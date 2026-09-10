@@ -384,5 +384,64 @@ All 123 Parser tests, 2 doctests, 11 Python methods, 20 large round trips and
 457 Core tests plus 7 doctests pass. WASM library compile-check passes.
 Publication retains the unchanged Core/SDK pins; no default-branch merge.
 
+
+\paragraph{JSON catch-up continuation, 2026-09-10 03:53 +02:00.}
+Created-at: 2026-09-10T03:53:00+02:00. ETA: 25 minutes for the first candidate
+and targeted correctness checks; the user explicitly authorized targeted JSON benchmarks and profiling at 03:58.
+Owner: Parser. Reuse parser-course-release, fast-forwarded to published master
+f116285 after fetching origin and github; preserve its existing .gitignore delta
+and the separate dirty parser checkout. No new worktree or Core source change.
+The archived compatible Unicode after-profile attributes 1939/9269 inclusive
+samples to lex\_string. Its escaped path scans once for the closing delimiter,
+then copies every byte separately. Reuse string\_prefix\_len for bulk copying
+ordinary runs and remember the first escape to avoid scanning the prefix twice.
+Preserve borrowed plain strings, owned escaped strings, unknown escapes, UTF-8,
+error text/offset and lexer position. Add a character-based decoding oracle over
+boundary lengths and escaped Unicode; run exact lexer and frozen diagnostic tests.
+Authorized scope: current Parser versus JSON, baseline/candidate on identical
+fixtures; 50k Unicode first, then affected and plain-string controls. Reuse
+Campaign and its 180-second process timeout / 16-GiB observed-memory guard.
+Two reversed rounds, ten Criterion samples after warmup. Profile separately
+from timed cells. Preserve source, binary/PDB and raw evidence in ignored reports.
+Performance acceptance is conditional on the evidence recorded below.
+Seven targeted correctness tests pass, including a character-based escape oracle,
+unterminated-string cursor checks, all available lexer backends, frozen parser
+diagnostics and four-format record parity. Clippy with warnings denied passes;
+the additional cognitive-complexity lint flags generated LALRPOP code only
+(generated code is exempt). Measurement authorization received; results follow in the existing report.
+
+
+\paragraph{Constructor boundary probe, 2026-09-10 04:19 +02:00.}
+ETA: 15 minutes; Parser grammar only, no Core item/API/lexer change beyond the
+separately retained escaped-run candidate. Current symbolized Unicode profiles
+still concentrate samples in item-list reduction and output construction.
+The earlier rejected all-constructor inline probe compounded alternatives through
+inline HyperItem and the first-pair list production. Keep HyperItem as an explicit
+nonterminal while inlining NodeDecl, EdgeDecl and HyperArc into it: preserve the
+compact first-pair list and callback ordering, eliminate temporary constructor
+values without their cross-product at every list site. Bound generation to 120 s.
+Accept only if the frozen AST/error digest and builder contracts pass, generation
+stays bounded, and matched native full-record plus AST controls justify the change.
+Otherwise restore only this grammar delta; the escaped-run evidence remains.
+
+
+\paragraph{Measured checkpoint, 2026-09-10 04:23 +02:00.}
+Retain escaped-run copying only. Native paired 50k Unicode full-record decoding:
+39.478 to 35.631 ms median (9.75 percent lower); five large-input timing/RSS gates
+pass. The full seven-case gate retains a small-input RSS regression flag and one
+inconclusive small-input row. Investigating that flag: identical-binary A/A gives
+19.49 percent peak spread; five post-warmup continuous-workload pairs give median
+5.914 vs 5.855 MiB. Do not relabel the original gate or claim all-green memory.
+Windows timings are inconclusive. Matched symbolized Windows CPU traces show
+lex\_string in 662/3575 vs 289/1740 inclusive decode samples; these are supporting
+sampled indicators, not additive time measurements. JSON parity remains unmet.
+The constructor-boundary probe generates promptly and preserves the frozen oracle,
+but gives only 1.02 percent Unicode decode improvement and 4.23 percent flat decode
+regression. Restore its grammar delta; retain its source/binary/raw evidence.
+Also separate the existing comparative retained-storage profile from correctness:
+it is ignored by default and both benchmark targets declare test=false. Normal
+selection demonstrably skips the profile; explicit ignored/exact invocation passes.
+No Core, Graph, Transformation or consumer pins change in this Parser-only step.
+
 \begin{center}\input{plan.tikz}\end{center}
 \end{document}

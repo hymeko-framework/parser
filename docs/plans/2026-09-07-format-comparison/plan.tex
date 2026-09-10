@@ -443,5 +443,46 @@ it is ignored by default and both benchmark targets declare test=false. Normal
 selection demonstrably skips the profile; explicit ignored/exact invocation passes.
 No Core, Graph, Transformation or consumer pins change in this Parser-only step.
 
+
+\paragraph{Vector string delimiter probe, 2026-09-10 20:50 +02:00.}
+ETA: 25 minutes: targeted tests, incremental native builds, paired full-record
+controls and evidence archival. Owner: Parser; reuse the synchronized existing
+checkout at 02ae74c and Amaterasu 192.168.1.228. Core protected items: none.
+Options from existing profiles: LR reduction/list movement (largest share,
+constructor inlining already rejected), escaped-string allocations/validation,
+and plain delimiter scanning. Probe the last with the smallest portable change:
+use baseline x86-64 SSE2 to scan sixteen bytes at a time inside the existing
+string\_prefix\_len; preserve the existing eight-byte/tail fallback elsewhere.
+No runtime feature dispatch, dependency, public API or grammar change.
+Discovery: common.rs owns the only string delimiter scanner; simd.rs contains
+whitespace/identifier kernels, no string kernel. Existing candidate profile
+attributes 289/1740 inclusive decode samples to lex\_string and 27 to its scan.
+This is a bounded hypothesis, not a promised end-to-end gain. No new scaffold.
+Scope: src/lexer/common.rs, its existing correctness tests, existing plan/report.
+Every vector read must be bounded by a complete sixteen-byte slice; arbitrary
+UTF-8 bytes are opaque, quotes and escapes remain byte delimiters. Test every
+vector/tail alignment against an independent scalar oracle and retain existing
+escape/error cursor tests plus frozen AST diagnostics and builder parity.
+Compare the prior escaped-run candidate against this change on identical native
+fixtures: long text first, then Unicode/plain/linked/nested and small controls.
+Two reversed rounds, ten warmed Criterion samples, CPU 2, 180-second timeout and
+16-GiB observed cap. Timing excludes fixture creation and final output drop.
+Rollback only the scanner delta if no stable benefit or any unexplained regression;
+preserve unrelated .gitignore and generated files. Reuse canonical campaign,
+report and provider archive tool; no new worktree. Profile separately if needed.
+
+
+\paragraph{Vector scan outcome, 2026-09-10 20:57 +02:00.}
+Retain for review: matched native long text 61.069 to 56.853 ms (6.90 percent),
+Unicode 35.785 to 34.220 ms (4.37 percent); focus timing/RSS gates pass.
+Controls retain a small Unicode RSS regression flag (7.012 to 8.125 MiB),
+two inconclusive cases and a 5.48-percent nested latency increase within budget.
+Five continuous-workload memory pairs give 6.082 to 6.148 MiB median; same-binary
+A/A is inconclusive. These investigate but do not erase the original flag.
+Ten targeted correctness tests pass on Windows, five scanner tests on Linux;
+Clippy and WASM compile pass. No default-branch merge or consumer pin change.
+Next opportunity: intermediate list/value construction, based on existing
+reduction and Vec-push profiles; no new grammar or API redesign implemented.
+
 \begin{center}\input{plan.tikz}\end{center}
 \end{document}

@@ -10,10 +10,28 @@ fn is_ident_start(c: u8) -> bool {
 }
 
 /// Length of the prefix containing neither a quote nor an escape introducer.
-/// Safe word loads skip eight bytes at a time, including arbitrary UTF-8 bytes.
+/// Bounded vector/word loads skip ordinary runs, including arbitrary UTF-8 bytes.
 #[inline]
 fn string_prefix_len(bytes: &[u8]) -> usize {
     let mut i = 0;
+    #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+    {
+        use std::arch::x86_64::*;
+        while let Some(chunk) = bytes[i..].first_chunk::<16>() {
+            // SAFETY: SSE2 is enabled for this target; chunk contains all sixteen
+            // bytes read by the unaligned load. No byte beyond the slice is read.
+            let mask = unsafe {
+                let word = _mm_loadu_si128(chunk.as_ptr().cast());
+                let quote = _mm_cmpeq_epi8(word, _mm_set1_epi8(b'"' as i8));
+                let escape = _mm_cmpeq_epi8(word, _mm_set1_epi8(b'\\' as i8));
+                _mm_movemask_epi8(_mm_or_si128(quote, escape)) as u32
+            };
+            if mask != 0 {
+                return i + mask.trailing_zeros() as usize;
+            }
+            i += 16;
+        }
+    }
     let has_zero =
         |word: u64| word.wrapping_sub(0x0101_0101_0101_0101) & !word & 0x8080_8080_8080_8080 != 0;
     while let Some(chunk) = bytes[i..].first_chunk::<8>() {
@@ -319,6 +337,37 @@ pub fn next_token<'a, L: CommonLexer<'a>>(lex: &mut L) -> Option<LexItem<'a>> {
 #[cfg(test)]
 mod tests {
     use super::string_prefix_len;
+
+    #[test]
+    fn string_prefix_matches_oracle_at_unaligned_vector_boundaries() {
+        for offset in 0..16 {
+            for len in 0..=96 {
+                let mut storage: Vec<u8> = (0..offset + len)
+                    .map(|i| [0xff, 0x80, b'a', 0, b'!', b']'][i % 6])
+                    .collect();
+                for delimiter in [b'"', b'\\'] {
+                    for position in 0..=len {
+                        let old = storage.get(offset + position).copied();
+                        if let Some(byte) = storage.get_mut(offset + position) {
+                            *byte = delimiter;
+                        }
+                        let input = &storage[offset..];
+                        let expected = input
+                            .iter()
+                            .position(|&b| b == b'"' || b == b'\\')
+                            .unwrap_or(input.len());
+                        assert_eq!(
+                            string_prefix_len(input), expected,
+                            "offset={offset} len={len} position={position}"
+                        );
+                        if let Some(old) = old {
+                            storage[offset + position] = old;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn escaped_runs_match_character_oracle_and_preserve_spans() {

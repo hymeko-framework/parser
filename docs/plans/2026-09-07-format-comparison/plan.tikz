@@ -19,6 +19,8 @@
 \draw[->] (q)--(f2);
 \node (b2) [below=of f2] {Single grammar: native AST / direct typed output; parity and A/B};
 \draw[->] (f2)--(b2);
+\node (c3) [below=of b2] {Incremental bodies / block handles / references; canonical AST adapter};
+\draw[->] (b2)--(c3);
 \end{tikzpicture}
 
 % 2026-09-08: Profile native AST; optimize proven hotspot; matched A/B preserves corpus.

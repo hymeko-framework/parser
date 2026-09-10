@@ -48,6 +48,199 @@ pub trait OutputBuilder<'a> {
     fn description(&mut self, description: DescriptionInput<'a, Self::Item>) -> Self::Output;
 }
 
+/// Incremental construction for consumers that do not need intermediate item lists.
+///
+/// The grammar calls `begin_node` / `begin_edge` after a block's opening brace,
+/// then reduces its children in source order, and finally calls `finish_node` / `finish_edge`.
+/// Statement nodes do not have a begin callback. Each list is assembled through
+/// the item methods, which may use consumer-owned storage instead of a `Vec`.
+/// All canonical syntax information is retained. As with [`OutputBuilder`],
+/// callbacks are non-transactional and syntax errors take precedence over output.
+/// Existing output builders implement this interface through the compatibility
+/// adapter below, without any changes to their callback order or input types.
+///
+/// Block entry receives the complete name, annotations and inheritance list.
+/// Its returned handle reaches the matching finish callback; a consumer may keep
+/// the metadata there or in its own scope storage. `Path` receives identifiers
+/// in order, and `canonical_path` must reconstruct that exact sequence for
+/// canonical header and value syntax. Reference signs are always -1, 0 or 1.
+/// Consumer-specific validation belongs in the returned items/output; it must
+/// not bypass subsequent grammar validation. Use a fresh builder after failure.
+pub trait ConstructionBuilder<'a> {
+    type Item;
+    type Items;
+    type Reference;
+    type Path;
+    type Block;
+    type Output;
+
+    fn begin_node(
+        &mut self,
+        name: &'a str,
+        anno: crate::ast::Anno<'a, &'a str>,
+        bases: Vec<Self::Reference>,
+    ) -> Self::Block;
+    fn begin_edge(
+        &mut self,
+        name: &'a str,
+        anno: crate::ast::Anno<'a, &'a str>,
+        bases: Vec<Self::Reference>,
+    ) -> Self::Block;
+    fn empty_items(&mut self) -> Self::Items;
+    fn one_item(&mut self, item: Self::Item) -> Self::Items;
+    fn two_items(&mut self, first: Self::Item, second: Self::Item) -> Self::Items;
+    fn push_item(&mut self, items: &mut Self::Items, item: Self::Item);
+    fn finish_leaf(&mut self, name: &'a str, anno: crate::ast::Anno<'a, &'a str>) -> Self::Item;
+    fn finish_node(&mut self, block: Self::Block, body: Self::Items) -> Self::Item;
+    fn finish_edge(&mut self, block: Self::Block, body: Self::Items) -> Self::Item;
+    fn path(&mut self, name: &'a str) -> Self::Path;
+    fn path_push(&mut self, path: &mut Self::Path, name: &'a str);
+    fn canonical_path(&mut self, path: Self::Path) -> crate::ast::Ref<&'a str>;
+    fn finish_reference(
+        &mut self,
+        sign: i8,
+        target: Self::Path,
+        anno: crate::ast::Anno<'a, &'a str>,
+    ) -> Self::Reference;
+    fn finish_arc(
+        &mut self,
+        anno: crate::ast::Anno<'a, &'a str>,
+        refs: Vec<Self::Reference>,
+    ) -> Self::Item;
+    fn finish_description(
+        &mut self,
+        name: &'a str,
+        header: HeaderBlock<'a>,
+        items: Self::Items,
+    ) -> Self::Output;
+}
+
+impl<'a, B: OutputBuilder<'a>> ConstructionBuilder<'a> for B {
+    type Item = B::Item;
+    type Items = Vec<B::Item>;
+    type Reference = SignedRef<'a, &'a str>;
+    type Path = crate::ast::Ref<&'a str>;
+    type Block = (&'a str, crate::ast::Anno<'a, &'a str>, Vec<Self::Reference>);
+    type Output = B::Output;
+
+    fn begin_node(
+        &mut self,
+        name: &'a str,
+        anno: crate::ast::Anno<'a, &'a str>,
+        bases: Vec<Self::Reference>,
+    ) -> Self::Block {
+        (name, anno, bases)
+    }
+    fn begin_edge(
+        &mut self,
+        name: &'a str,
+        anno: crate::ast::Anno<'a, &'a str>,
+        bases: Vec<Self::Reference>,
+    ) -> Self::Block {
+        (name, anno, bases)
+    }
+    fn empty_items(&mut self) -> Self::Items {
+        Vec::new()
+    }
+    fn one_item(&mut self, item: Self::Item) -> Self::Items {
+        vec![item]
+    }
+    fn two_items(&mut self, first: Self::Item, second: Self::Item) -> Self::Items {
+        vec![first, second]
+    }
+    fn push_item(&mut self, items: &mut Self::Items, item: Self::Item) {
+        items.push(item);
+    }
+    fn finish_leaf(&mut self, name: &'a str, anno: crate::ast::Anno<'a, &'a str>) -> Self::Item {
+        OutputBuilder::node(
+            self,
+            NodeInput {
+                anno,
+                inner: DeclarationBody {
+                    name,
+                    bases: Vec::new(),
+                    body: None,
+                },
+            },
+        )
+    }
+    fn finish_node(&mut self, block: Self::Block, body: Self::Items) -> Self::Item {
+        let (name, anno, bases) = block;
+        OutputBuilder::node(
+            self,
+            NodeInput {
+                anno,
+                inner: DeclarationBody {
+                    name,
+                    bases,
+                    body: Some(body),
+                },
+            },
+        )
+    }
+    fn finish_edge(&mut self, block: Self::Block, body: Self::Items) -> Self::Item {
+        let (name, anno, bases) = block;
+        OutputBuilder::edge(
+            self,
+            EdgeInput {
+                anno,
+                inner: DeclarationBody { name, bases, body },
+            },
+        )
+    }
+    fn path(&mut self, name: &'a str) -> Self::Path {
+        crate::ast::Ref { path: vec![name] }
+    }
+    fn path_push(&mut self, path: &mut Self::Path, name: &'a str) {
+        path.path.push(name);
+    }
+    fn canonical_path(&mut self, path: Self::Path) -> crate::ast::Ref<&'a str> {
+        path
+    }
+    fn finish_reference(
+        &mut self,
+        sign: i8,
+        target: Self::Path,
+        anno: crate::ast::Anno<'a, &'a str>,
+    ) -> Self::Reference {
+        let atom = crate::ast::RefAtom { target, anno };
+        match sign {
+            -1 => SignedRef::Minus(atom),
+            0 => SignedRef::Neutral(atom),
+            1 => SignedRef::Plus(atom),
+            _ => unreachable!("grammar sign"),
+        }
+    }
+    fn finish_arc(
+        &mut self,
+        anno: crate::ast::Anno<'a, &'a str>,
+        refs: Vec<Self::Reference>,
+    ) -> Self::Item {
+        OutputBuilder::arc(
+            self,
+            HyperArc {
+                anno,
+                inner: crate::ast::ArcInner { refs },
+            },
+        )
+    }
+    fn finish_description(
+        &mut self,
+        name: &'a str,
+        header: HeaderBlock<'a>,
+        items: Self::Items,
+    ) -> Self::Output {
+        OutputBuilder::description(
+            self,
+            DescriptionInput {
+                name,
+                header,
+                items,
+            },
+        )
+    }
+}
+
 /// Compatibility output builder: constructs the original borrowed native AST.
 #[derive(Default)]
 pub struct AstBuilder;

@@ -39,8 +39,8 @@ pub mod hymeko {
 
     struct TokenInput<T>(T);
 
-    impl<'a, B: crate::builder::OutputBuilder<'a>, T: __ToTriple<'a>> grammar::__ToTriple<'a, B>
-        for TokenInput<T>
+    impl<'a, B: crate::builder::ConstructionBuilder<'a>, T: __ToTriple<'a>>
+        grammar::__ToTriple<'a, B> for TokenInput<T>
     {
         fn to_triple(self) -> Result<(usize, Token<'a>, usize), ParseError<'a>> {
             self.0.to_triple()
@@ -87,7 +87,7 @@ use std::io;
 use std::path::Path;
 
 use crate::ast::AstStr;
-use crate::builder::{AstBuilder, OutputBuilder};
+use crate::builder::{AstBuilder, ConstructionBuilder, OutputBuilder};
 use crate::hymeko::QueryVarParser;
 #[cfg(target_arch = "x86_64")]
 use crate::lexer::simd::{Avx2Lexer, Sse2Lexer};
@@ -108,7 +108,7 @@ pub type ParseError<'a> = lalrpop_util::ParseError<usize, Token<'a>, LexError>;
 fn parse_description_inner<'a, I, B>(iter: I, builder: &mut B) -> Result<B::Output, ParseError<'a>>
 where
     I: Iterator<Item = SpannedLexItem<'a>>,
-    B: OutputBuilder<'a>,
+    B: ConstructionBuilder<'a>,
 {
     grammar::DescriptionParser::new().parse(builder, iter)
 }
@@ -132,6 +132,17 @@ pub fn parse_description(input: &str) -> Result<AstStr<'_>, ParseError<'_>> {
 /// assert_eq!(ast.items.len(), 1);
 /// ```
 pub fn parse_description_with<'a, B: OutputBuilder<'a>>(
+    input: &'a str,
+    builder: &mut B,
+) -> Result<B::Output, ParseError<'a>> {
+    parse_description_into(input, builder)
+}
+
+/// Parse the full language with consumer-owned incremental construction.
+///
+/// See [`ConstructionBuilder`] for block-entry and non-transactional callbacks.
+/// Syntax errors remain authoritative even when a consumer accumulates an error.
+pub fn parse_description_into<'a, B: ConstructionBuilder<'a>>(
     input: &'a str,
     builder: &mut B,
 ) -> Result<B::Output, ParseError<'a>> {

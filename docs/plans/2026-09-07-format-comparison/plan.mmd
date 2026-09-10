@@ -34,3 +34,7 @@ flowchart TD
     B2 --> D2[Direct owned records: deferred semantic errors]
     A2 --> X2[Parity, ownership, AST and record performance gates]
     D2 --> X2
+
+    D2 --> C3[ConstructionBuilder: incremental bodies, blocks and references]
+    C3 --> R3[Full grammar and canonical AST compatibility checks]
+    R3 --> J3[Matched 50k decoding: long text beats JSON; four gaps remain]

@@ -5,6 +5,168 @@ use formats::adapters::Format;
 use formats::model::{Dataset, Pattern};
 
 #[test]
+fn incremental_construction_preserves_scope_order_and_deep_inputs() {
+    use parser::ast::{Anno, HeaderBlock, SignedRef};
+    use parser::builder::ConstructionBuilder;
+    #[derive(Default)]
+    struct Counter(Vec<String>);
+    impl<'a> ConstructionBuilder<'a> for Counter {
+        type Item = usize;
+        type Items = usize;
+        type Reference = SignedRef<'a, &'a str>;
+        type Path = parser::ast::Ref<&'a str>;
+        type Block = &'a str;
+        type Output = usize;
+        fn begin_node(
+            &mut self,
+            name: &'a str,
+            _: Anno<'a, &'a str>,
+            _: Vec<Self::Reference>,
+        ) -> Self::Block {
+            self.0.push(format!("open node {name}"));
+            name
+        }
+        fn begin_edge(
+            &mut self,
+            name: &'a str,
+            _: Anno<'a, &'a str>,
+            _: Vec<Self::Reference>,
+        ) -> Self::Block {
+            self.0.push(format!("open edge {name}"));
+            name
+        }
+        fn empty_items(&mut self) -> usize {
+            0
+        }
+        fn one_item(&mut self, item: usize) -> usize {
+            item
+        }
+        fn two_items(&mut self, a: usize, b: usize) -> usize {
+            a + b
+        }
+        fn push_item(&mut self, items: &mut usize, item: usize) {
+            *items += item;
+        }
+        fn finish_leaf(&mut self, name: &'a str, _: Anno<'a, &'a str>) -> usize {
+            self.0.push(format!("node {name}"));
+            1
+        }
+        fn finish_node(&mut self, name: Self::Block, body: usize) -> usize {
+            self.0.push(format!("node {name}"));
+            1 + body
+        }
+        fn finish_edge(&mut self, name: Self::Block, body: usize) -> usize {
+            self.0.push(format!("edge {name}"));
+            1 + body
+        }
+        fn path(&mut self, name: &'a str) -> Self::Path {
+            parser::builder::AstBuilder.path(name)
+        }
+        fn path_push(&mut self, path: &mut Self::Path, name: &'a str) {
+            parser::builder::AstBuilder.path_push(path, name);
+        }
+        fn canonical_path(&mut self, path: Self::Path) -> parser::ast::Ref<&'a str> {
+            path
+        }
+        fn finish_reference(
+            &mut self,
+            sign: i8,
+            target: parser::ast::Ref<&'a str>,
+            anno: Anno<'a, &'a str>,
+        ) -> Self::Reference {
+            parser::builder::AstBuilder.finish_reference(sign, target, anno)
+        }
+        fn finish_arc(&mut self, _: Anno<'a, &'a str>, _: Vec<Self::Reference>) -> usize {
+            self.0.push("arc".into());
+            1
+        }
+        fn finish_description(&mut self, _: &'a str, _: HeaderBlock<'a>, items: usize) -> usize {
+            self.0.push("description".into());
+            items
+        }
+    }
+    let mut counter = Counter::default();
+    assert_eq!(
+        parser::parse_description_into("T{header;} a; n{b; @e{(+x[1]);}} c;", &mut counter),
+        Ok(6)
+    );
+    assert_eq!(
+        counter.0,
+        [
+            "node a",
+            "open node n",
+            "node b",
+            "open edge e",
+            "arc",
+            "edge e",
+            "node n",
+            "node c",
+            "description"
+        ]
+    );
+    for count in 0..=4 {
+        assert_eq!(
+            parser::parse_description_into(
+                &format!("T{{}} {}", "n;".repeat(count)),
+                &mut Counter::default()
+            ),
+            Ok(count)
+        );
+    }
+    let mut failed = Counter::default();
+    assert!(parser::parse_description_into("T{} n{leaf; @", &mut failed).is_err());
+    assert_eq!(failed.0, ["open node n", "node leaf"]);
+    let deep = format!("T{{}} {}leaf;{}", "n{".repeat(1024), "}".repeat(1024));
+    assert_eq!(
+        parser::parse_description_into(&deep, &mut Counter::default()),
+        Ok(1025)
+    );
+}
+
+#[test]
+fn incremental_values_preserve_headers_lists_and_reference_errors() {
+    for value in [
+        "0", "-0.0", "[]", "[1]", "[-0.0,]", "[1,2]", "[[1]]", "[[1],2]", "[1,[2]]", "a.b",
+        "(1+2)", "\"x\"", "[\"x\"]",
+    ] {
+        for field in [
+            format!("value {value}; text \"ok\";"),
+            format!("value 1; text {value};"),
+            format!("value 1; text \"ok\"; @refs{{(+a.b.c {value});}}"),
+        ] {
+            for header in [
+                String::new(),
+                format!("h<tag,tag> {value}; using a.b as c;"),
+            ] {
+                let source = format!("Test{{{header}}} root: +base [3] {{{field}}}");
+                let expected = parser::parse_description(&source)
+                    .map_err(|e| format!("{e:?}"))
+                    .and_then(Dataset::from_hymeko);
+                assert_eq!(Format::Hymeko.decode(&source), expected, "{source}");
+            }
+        }
+    }
+}
+
+#[test]
+fn recursive_shapes_match_legacy_parser() {
+    use parser::hymeko::DescriptionParser;
+    use parser::lexer::simd::{CoreLexer, ScalarLexer};
+    for depth in [1, 2, 8, 16, 32, 64] {
+        for (open, close, leaf) in [("n{", "}", "leaf;"), ("[", "]", "1")] {
+            let body = format!("{}{}{}", open.repeat(depth), leaf, close.repeat(depth));
+            let source = if open == "[" {
+                format!("Test{{}} n {body};")
+            } else {
+                format!("Test{{}} {body}")
+            };
+            let legacy = DescriptionParser::new().parse(ScalarLexer(CoreLexer::new(&source)));
+            assert_eq!(parser::parse_description(&source), legacy, "depth={depth}");
+        }
+    }
+}
+
+#[test]
 fn record_builder_transfers_compact_link_buffers_without_retaining_slack() {
     use formats::adapters::{BuiltItem, RecordBuilder};
     use formats::model::Link;
@@ -78,6 +240,7 @@ fn direct_builder_matches_owned_records_and_error_precedence() {
             let source = Format::Hymeko.encode(&expected).unwrap();
             let direct = RecordBuilder::decode(&source).unwrap();
             assert_eq!(direct, expected);
+            assert_eq!(Format::Hymeko.decode(&source).unwrap(), expected);
         }
     }
     let bodies = [
@@ -95,6 +258,7 @@ fn direct_builder_matches_owned_records_and_error_precedence() {
         "@refs{(+a [1],-b [-0.0]);}",
         "value 1; text \"a\"; @refs{(+a [1]);(-b [2]);} @refs{(~c [3]);}",
         "@refs{(+a);}",
+        "value 1; text \"a\"; @refs{(+a.b.c [1], -<tag>x.y<other> [2]);}",
         "@refs{not_an_arc;} value \"bad\";",
         "@other{(+a);}",
         "value -0.0; text \"é\\n🙂\"; @refs{(+a [2]);} @refs{(-b [3]);}",
@@ -107,6 +271,11 @@ fn direct_builder_matches_owned_records_and_error_precedence() {
                     .map_err(|e| format!("{e:?}"))
                     .and_then(Dataset::from_hymeko);
                 assert_eq!(RecordBuilder::decode(&source), original, "{source}");
+                assert_eq!(
+                    Format::Hymeko.decode(&source),
+                    original,
+                    "streaming: {source}"
+                );
             }
         }
     }
@@ -115,7 +284,6 @@ fn direct_builder_matches_owned_records_and_error_precedence() {
 #[test]
 #[ignore = "allocation profile; explicit opt-in with --ignored --exact"]
 fn direct_builder_retained_storage_profile() {
-    use formats::adapters::RecordBuilder;
     fn retained_bytes(data: &Dataset) -> usize {
         use formats::model::{Link, Record};
         let mut total = data.node.capacity() * std::mem::size_of::<Record>();
@@ -136,7 +304,7 @@ fn direct_builder_retained_storage_profile() {
     for pattern in Pattern::ALL {
         let expected = Dataset::generate(pattern, 1000);
         let source = Format::Hymeko.encode(&expected).unwrap();
-        let direct = RecordBuilder::decode(&source).unwrap();
+        let direct = Format::Hymeko.decode(&source).unwrap();
         let original = Dataset::from_hymeko(parser::parse_description(&source).unwrap()).unwrap();
         assert_eq!(direct, expected);
         assert!(retained_bytes(&direct) <= retained_bytes(&original));
@@ -208,6 +376,10 @@ fn custom_builder_and_legacy_token_callers_keep_their_contracts() {
     assert!(
         incomplete.0 > 0,
         "callbacks before a syntax error are not rolled back"
+    );
+    assert_eq!(
+        incomplete.0, 2,
+        "diagnostic validation must not replay user callbacks"
     );
     struct CustomError;
     impl<'a> __ToTriple<'a> for CustomError {

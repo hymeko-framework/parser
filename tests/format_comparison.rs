@@ -7,39 +7,12 @@ use formats::model::{Dataset, Pattern};
 #[test]
 fn direct_builder_matches_owned_records_and_error_precedence() {
     use formats::adapters::RecordBuilder;
-    fn retained_bytes(data: &Dataset) -> usize {
-        use formats::model::{Link, Record};
-        let mut total = data.node.capacity() * std::mem::size_of::<Record>();
-        let mut pending: Vec<_> = data.node.iter().collect();
-        while let Some(record) = pending.pop() {
-            total += record.id.capacity() + record.text.capacity();
-            total += record.child.capacity() * std::mem::size_of::<Record>();
-            total += record.link.capacity() * std::mem::size_of::<Link>();
-            total += record
-                .link
-                .iter()
-                .map(|link| link.target.capacity())
-                .sum::<usize>();
-            pending.extend(&record.child);
-        }
-        total
-    }
     for pattern in Pattern::ALL {
         for count in [0, 1, 2, 17, 1000] {
             let expected = Dataset::generate(pattern, count);
             let source = Format::Hymeko.encode(&expected).unwrap();
             let direct = RecordBuilder::decode(&source).unwrap();
             assert_eq!(direct, expected);
-            if count == 1000 {
-                let original =
-                    Dataset::from_hymeko(parser::parse_description(&source).unwrap()).unwrap();
-                assert!(retained_bytes(&direct) <= retained_bytes(&original));
-                println!(
-                    "RETAINED {pattern:?}: original={} direct={}",
-                    retained_bytes(&original),
-                    retained_bytes(&direct)
-                );
-            }
         }
     }
     let bodies = [
@@ -70,6 +43,42 @@ fn direct_builder_matches_owned_records_and_error_precedence() {
                 assert_eq!(RecordBuilder::decode(&source), original, "{source}");
             }
         }
+    }
+}
+
+#[test]
+#[ignore = "allocation profile; explicit opt-in with --ignored --exact"]
+fn direct_builder_retained_storage_profile() {
+    use formats::adapters::RecordBuilder;
+    fn retained_bytes(data: &Dataset) -> usize {
+        use formats::model::{Link, Record};
+        let mut total = data.node.capacity() * std::mem::size_of::<Record>();
+        let mut pending: Vec<_> = data.node.iter().collect();
+        while let Some(record) = pending.pop() {
+            total += record.id.capacity() + record.text.capacity();
+            total += record.child.capacity() * std::mem::size_of::<Record>();
+            total += record.link.capacity() * std::mem::size_of::<Link>();
+            total += record
+                .link
+                .iter()
+                .map(|link| link.target.capacity())
+                .sum::<usize>();
+            pending.extend(&record.child);
+        }
+        total
+    }
+    for pattern in Pattern::ALL {
+        let expected = Dataset::generate(pattern, 1000);
+        let source = Format::Hymeko.encode(&expected).unwrap();
+        let direct = RecordBuilder::decode(&source).unwrap();
+        let original = Dataset::from_hymeko(parser::parse_description(&source).unwrap()).unwrap();
+        assert_eq!(direct, expected);
+        assert!(retained_bytes(&direct) <= retained_bytes(&original));
+        println!(
+            "RETAINED {pattern:?}: original={} direct={}",
+            retained_bytes(&original),
+            retained_bytes(&direct)
+        );
     }
 }
 

@@ -19,6 +19,8 @@ blake3 = "1"
 [[bench]]
 name = "parser_bench"
 harness = false
+test = false
 [[bench]]
 name = "format_bench"
 harness = false
+test = false

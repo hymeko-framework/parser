@@ -47,17 +47,17 @@ fn main() {
     } else {
         None
     };
-    let mut criterion = Criterion::default().configure_from_args();
+    let mut criterion = Criterion::default()
+        .sample_size(10)
+        .warm_up_time(Duration::from_millis(200))
+        .measurement_time(Duration::from_millis(500))
+        .configure_from_args();
     let mut group = criterion.benchmark_group(format!(
         "formats/{}/{nodes}/{}",
         pattern.name(),
         format.name()
     ));
-    group
-        .sample_size(10)
-        .warm_up_time(Duration::from_millis(200))
-        .measurement_time(Duration::from_millis(500))
-        .sampling_mode(SamplingMode::Flat);
+    group.sampling_mode(SamplingMode::Flat);
     group.throughput(Throughput::Bytes(fixture.bytes as u64));
     match phase.as_str() {
         "serialize" => group.bench_function(&phase, |b| {

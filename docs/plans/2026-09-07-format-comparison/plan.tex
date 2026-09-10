@@ -778,5 +778,57 @@ inconclusive because of RSS drift. The aggregate gate and CPU-profile gate remai
 open; this checkpoint is not accepted for master integration. Evidence and rejected
 probes are in the existing format-comparison report and shared Samba archive.
 
+\paragraph{Long-text investigation, 2026-09-11 00:23 +02:00.}
+Freshly fetched performance branches match published 3348348 on both remotes.
+Build its Windows benchmark with debug symbols and reuse the exact e4f45b2
+baseline executable. Record a single bounded Samply session containing sequential
+baseline/candidate long-text and linked processes; descendant tracking preserves
+their identity and avoids repeated elevation prompts. Each Criterion profile cell
+runs for four seconds on the existing certified 50k fixtures. Record process IDs,
+binary hashes and command environments. Separate parser samples from setup.
+Investigate the long-text scan hypothesis from CPU evidence before choosing a
+source change; validate any change with targeted correctness and paired controls.
+The existing 10 percent time/RSS gates remain unchanged. UAC approval is an OS
+requirement; do not replace or bypass the approved profiler if it is unavailable.
+
+\paragraph{Profile-directed scan fix, 2026-09-11 00:27 +02:00.}
+The four-process Samply recording completed successfully. Long-text candidate
+has 423 exclusive memchr-aligned samples among 3304 decode samples (12.8 percent);
+the baseline has no such hot scan. Linked LR drive samples fall from 1096/3686 to
+449/3332, consistent with replacing per-reference reductions by complete arcs.
+Keep the existing parser dispatch and token layout; accelerate only the full-input
+parenthesis search with runtime-checked AVX2 and a portable slice fallback.
+Use bounded unaligned 32-byte loads and a scalar remainder; no dependency changes.
+Test every position around SIMD boundaries and misaligned input starts against the
+scalar oracle. Run targeted library and format correctness, then a long-text/linked/
+flat paired native campaign and a fresh candidate CPU profile. Retain the change
+only if the unchanged latency and RSS controls pass.
+
+\paragraph{Measurement stability, 2026-09-11 00:31 +02:00.}
+The scan-only candidate passes 34 correctness tests on each platform. Its fresh
+profile reduces scan samples from 397/3285 to 239/3329. The first native comparison
+improves long-text median from 46.35 to 45.18 ms, but baseline samples alternate
+between roughly 37 and 55 ms when Criterion chooses one iteration per sample.
+RSS also drifts across short processes. Preserve these inconclusive results.
+Move the existing Criterion timing defaults before configure-from-args so explicit
+CLI duration options work instead of being overridden by benchmark-group settings.
+Build e4f45b2, 3348348 and the candidate with this same harness adjustment; keep
+each source snapshot. Use one-second warmup and three-second measurement windows,
+ten samples, two reversed rounds for long-text, linked and flat controls, with
+JSON measured in the same schedule. Keep caps and acceptance thresholds unchanged.
+This investigates the observed single-iteration instability, not retry-until-pass.
+
+\paragraph{Validated scan result, 2026-09-11 00:35 +02:00.}
+The stable 24-cell campaign finishes in 120.85 seconds. All three latency/RSS
+controls pass against both 3348348 and e4f45b2 with the same adjusted harness.
+Long text measures 45.009 ms versus JSON 45.116 ms; linked 81.443 ms versus JSON
+85.870 ms. Flat remains 24.615 ms versus JSON 11.558 ms. Long text is still
+9.14 percent slower than e4f45b2, although improved 4.87 percent from 3348348;
+the added scan remains a measured cost, not a zero-cost optimization.
+Retain the bounded AVX2 scan and portable fallback, publish the performance-branch
+checkpoint and archive its evidence. CPU-profile confirmation is now available.
+Full JSON parity remains open, especially flat and Unicode; this focused campaign
+does not replace unmeasured cases or authorize a claim of full-suite parity.
+
 \begin{center}\input{plan.tikz}\end{center}
 \end{document}

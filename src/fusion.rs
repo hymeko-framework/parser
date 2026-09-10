@@ -4,6 +4,33 @@ use crate::{
     builder::LiteralReference,
     lexer::{Token as Original, common::CommonLexer},
 };
+
+/// A conservative dispatch hint; parentheses in strings/comments are harmless.
+pub(crate) fn contains_arc_start(input: &[u8]) -> bool {
+    #[cfg(target_arch = "x86_64")]
+    if std::is_x86_feature_detected!("avx2") {
+        // SAFETY: runtime feature detection guards every call.
+        return unsafe { contains_arc_start_avx2(input) };
+    }
+    input.contains(&b'(')
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn contains_arc_start_avx2(input: &[u8]) -> bool {
+    use std::arch::x86_64::*;
+    let needle = _mm256_set1_epi8(b'(' as i8);
+    let mut chunks = input.chunks_exact(32);
+    for chunk in &mut chunks {
+        // SAFETY: chunks_exact guarantees 32 readable bytes; loadu needs no alignment.
+        let bytes = unsafe { _mm256_loadu_si256(chunk.as_ptr().cast()) };
+        if _mm256_movemask_epi8(_mm256_cmpeq_epi8(bytes, needle)) != 0 {
+            return true;
+        }
+    }
+    chunks.remainder().contains(&b'(')
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Token<'a> {
     Plain(Original<'a>),
@@ -80,6 +107,26 @@ impl<'a, I: Iterator<Item = SpannedLexItem<'a>> + CommonLexer<'a>> Iterator for 
 mod tests {
     use super::*;
     use crate::lexer::simd::{CoreLexer, ScalarLexer};
+
+    #[test]
+    fn arc_scan_matches_scalar_at_boundaries_and_unaligned_starts() {
+        for offset in 0..32 {
+            for len in 0..=130 {
+                let mut storage = vec![b'x'; offset + len];
+                assert!(!contains_arc_start(&storage[offset..]));
+                for position in offset..storage.len() {
+                    storage[position] = b'(';
+                    let input = &storage[offset..];
+                    assert_eq!(contains_arc_start(input), input.contains(&b'('));
+                    storage[position] = b'x';
+                }
+            }
+        }
+        assert!(contains_arc_start(
+            "unicode \u{e1}\u{1f600} ( tail".as_bytes()
+        ));
+        assert!(!contains_arc_start("unicode \u{e1}\u{1f600}".as_bytes()));
+    }
 
     #[test]
     fn mismatches_keep_tokens_spans_and_lexical_errors() {

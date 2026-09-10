@@ -120,7 +120,7 @@ where
     I: Iterator<Item = SpannedLexItem<'a>> + lexer::common::CommonLexer<'a>,
     B: ConstructionBuilder<'a>,
 {
-    if !builder.fuse_literal_arcs() || !input.as_bytes().contains(&b'(') {
+    if !builder.fuse_literal_arcs() || !fusion::contains_arc_start(input.as_bytes()) {
         return grammar::DescriptionParser::new().parse(builder, iter);
     }
     match fast_grammar::DescriptionParser::new().parse(builder, fusion::Fuser::new(iter)) {

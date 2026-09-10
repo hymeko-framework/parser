@@ -180,6 +180,19 @@ impl Record {
 }
 
 impl Link {
+    fn append_owned(destination: &mut Vec<Self>, source: Vec<Self>) {
+        if source.is_empty() {
+            return;
+        }
+        // Reuse compact buffers without retaining more spare capacity than
+        // the former extension into an empty Vec (minimum reserve: four Links).
+        if destination.is_empty() && source.capacity() <= source.len().max(4) {
+            *destination = source;
+        } else {
+            destination.extend(source);
+        }
+    }
+
     fn from_hymeko(r: &SignedRef<'_, &str>) -> Result<Self, String> {
         let (sign, atom) = match r {
             SignedRef::Minus(a) => (-1, a),
@@ -264,7 +277,7 @@ impl RecordBuilder {
                 node @ (BuiltItem::Node(..) | BuiltItem::Leaf(..)) => {
                     record.child.push(node.record()?);
                 }
-                BuiltItem::Edge("refs", links) => record.link.extend(links?),
+                BuiltItem::Edge("refs", links) => Link::append_owned(&mut record.link, links?),
                 _ => return Err("unexpected benchmark record field".into()),
             }
         }
@@ -299,7 +312,7 @@ impl<'a> parser::builder::OutputBuilder<'a> for RecordBuilder {
                 let BuiltItem::Arc(arc) = item else {
                     return Err("expected link arc".into());
                 };
-                links.extend(arc?);
+                Link::append_owned(&mut links, arc?);
                 Ok(links)
             });
         BuiltItem::Edge(edge.inner.name, links)

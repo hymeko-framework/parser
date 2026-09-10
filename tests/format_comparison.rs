@@ -5,6 +5,71 @@ use formats::adapters::Format;
 use formats::model::{Dataset, Pattern};
 
 #[test]
+fn record_builder_transfers_compact_link_buffers_without_retaining_slack() {
+    use formats::adapters::{BuiltItem, RecordBuilder};
+    use formats::model::Link;
+    use parser::ast::{Anno, Value};
+    use parser::builder::{DeclarationBody, EdgeInput, NodeInput, OutputBuilder};
+
+    for count in [1, 2, 8, 17] {
+        for slack in [0, 128] {
+            let mut links = Vec::with_capacity(count + slack);
+            links.extend((0..count).map(|i| Link {
+                target: format!("n{i}"),
+                sign: 1,
+                weight: i as f64,
+            }));
+            let original = links.clone();
+            let pointer = links.as_ptr();
+            let mut builder = RecordBuilder;
+            let edge = builder.edge(EdgeInput {
+                anno: Anno::default(),
+                inner: DeclarationBody {
+                    name: "refs",
+                    bases: Vec::new(),
+                    body: vec![
+                        BuiltItem::Arc(Ok(Vec::with_capacity(128))),
+                        BuiltItem::Arc(Ok(links)),
+                        BuiltItem::Arc(Ok(Vec::new())),
+                    ],
+                },
+            });
+            let BuiltItem::Edge(_, Ok(edge_links)) = &edge else {
+                panic!("edge")
+            };
+            assert_eq!(edge_links, &original);
+            if slack == 0 {
+                assert_eq!(edge_links.as_ptr(), pointer, "arc buffer should transfer");
+            }
+            assert!(edge_links.capacity() <= count.max(4));
+            let edge_pointer = edge_links.as_ptr();
+            let node = builder.node(NodeInput {
+                anno: Anno::default(),
+                inner: DeclarationBody {
+                    name: "root",
+                    bases: Vec::new(),
+                    body: Some(vec![
+                        BuiltItem::Leaf("value", Some(Value::Num(1.0))),
+                        BuiltItem::Leaf("text", Some(Value::Str("text".into()))),
+                        edge,
+                    ]),
+                },
+            });
+            let BuiltItem::Node(_, Ok(record)) = node else {
+                panic!("record")
+            };
+            assert_eq!(record.link, original);
+            assert_eq!(
+                record.link.as_ptr(),
+                edge_pointer,
+                "edge buffer should transfer"
+            );
+            assert!(record.link.capacity() <= count.max(4));
+        }
+    }
+}
+
+#[test]
 fn direct_builder_matches_owned_records_and_error_precedence() {
     use formats::adapters::RecordBuilder;
     for pattern in Pattern::ALL {
@@ -28,6 +93,7 @@ fn direct_builder_matches_owned_records_and_error_precedence() {
         "child;",
         "child{}",
         "@refs{(+a [1],-b [-0.0]);}",
+        "value 1; text \"a\"; @refs{(+a [1]);(-b [2]);} @refs{(~c [3]);}",
         "@refs{(+a);}",
         "@refs{not_an_arc;} value \"bad\";",
         "@other{(+a);}",
@@ -427,7 +493,7 @@ fn escaped_unicode_agrees_across_lexer_tiers() {
 #[test]
 fn separated_lists_preserve_order_and_trailing_separator_rules() {
     use parser::ast::{HyperItem, SignedRef, Value};
-    for count in [1, 2, 8, 257] {
+    for count in [1, 2, 3, 4, 7, 8, 9, 16, 17, 257, 1025] {
         let names: Vec<_> = (0..count).map(|i| format!("n{i}")).collect();
         let tags = names.join(",");
         let path = names.join(".");

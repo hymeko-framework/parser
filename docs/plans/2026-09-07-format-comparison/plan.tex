@@ -484,5 +484,60 @@ Clippy and WASM compile pass. No default-branch merge or consumer pin change.
 Next opportunity: intermediate list/value construction, based on existing
 reduction and Vec-push profiles; no new grammar or API redesign implemented.
 
+
+\paragraph{List wrapper continuation, 2026-09-10 21:04 +02:00.}
+ETA: 20 minutes. Freshly fetched Parser branch equals both remote heads at
+686ce81. Owner: Parser; Core protected items and dependency changes: none.
+Existing profiles identify ValueList/SignedRefList construction and generated
+reductions as hot paths. Separated already accumulates directly, but each completed
+value/reference vector still crosses a forwarding LR nonterminal. Inline only
+ValueList and SignedRefList into their existing callers; retain Separated and all
+public AST/builder types, order, trailing-comma and syntax-error behavior.
+This eliminates representation forwarding, not the owned output allocations;
+no allocation-count reduction is claimed without measurement. Constructor
+inlining is a separate rejected candidate and is not repeated.
+Discovery: these two rules are canonical in hymeko.lalrpop; existing list/annotation
+and frozen AST/diagnostic tests cover them. Extend existing list cases with lengths
+around growth boundaries and larger lists. Source changes: two private grammar
+annotations/comments, targeted test expansion, existing plan/report. No new API.
+Run the expanded tests on the current baseline first, then the candidate; cap
+code generation/build at 120 seconds. Native A/B against 686ce81 uses identical
+inputs and existing campaign, CPU 2, two reversed rounds, ten warmed samples,
+180-second process limit and 16-GiB observed cap. Start linked full decoding,
+then flat/Unicode; broaden to relevant control cases only if useful. Restore
+only the grammar delta if benefit is absent or a regression remains unexplained.
+
+
+\paragraph{Owned link-buffer probe, 2026-09-10 21:07 +02:00.}
+Reject list-wrapper fusion: linked latency improves only 0.97 percent while its
+process RSS rises 11.32 percent; Unicode is inconclusive due baseline round drift.
+Restore the exact pre-probe grammar. Keep the expanded independent correctness cases.
+Next owner: the benchmark's existing typed RecordBuilder adapter, not the production
+parser grammar or Core. Completed Link vectors are copied into empty vectors twice,
+at arc-to-edge and edge-to-record boundaries. Existing linked profiles contain
+allocation/vector movement; source inspection identifies these avoidable copies.
+Preserve source order, first-error precedence and retained output capacity. Transfer
+the first suitable owned buffer; append subsequent groups normally. Do not retain
+an oversized incoming allocation merely to make the timing look better.
+Scope: benches/formats/adapters.rs and tests/format\_comparison.rs; no public API,
+new dependency or production parser change. A deterministic pointer/capacity test
+must fail on the original adapter and pass after the change. Existing builder/AST
+parity and explicit retained-storage profile remain controls. Measure linked native
+owned decoding against 686ce81, then other cases if useful; same caps/harness.
+This can improve the measured consumer; it is not a universal parser speed claim.
+
+
+\paragraph{List/buffer outcome, 2026-09-10 21:13 +02:00.}
+Grammar probe rejected and restored: linked RSS +11.32 percent for less than
+one-percent time benefit. Retain the benchmark RecordBuilder ownership change
+only. Pointer/capacity test fails before and passes after; Windows/native parity
+pass and the explicit retained-storage profile is unchanged in every pattern.
+The compact-buffer path avoids two unnecessary replacements for the common
+single-arc edge, while oversized capacity still takes the old append path.
+All three native A/B gates pass; linked full-record latency improves only
+0.76 percent. No substantial or general Parser speedup is claimed. JSON remains
+faster; its Unicode control has round drift. The full owned AST/value/list
+construction boundary remains a larger, explicitly scoped future API question.
+
 \begin{center}\input{plan.tikz}\end{center}
 \end{document}

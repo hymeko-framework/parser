@@ -911,5 +911,52 @@ master integration remain open. Removing the inactive virtual feature changes
 neither the retained buffer algorithm nor the timing boundary; the final build
 and profile snapshots are recorded separately from the comparison binaries.
 
+\paragraph{Nested regression and allocation attribution, 2026-09-11 01:58 +02:00.}
+Continue the authorized iterative JSON optimization in Parser at b8a0545; both
+remotes freshly fetched and equal. Preserve unrelated gitignore/LaTeX changes.
+First compare exact stored baseline and retained binaries on nested/linked only,
+using certified 50k fixtures, two reversed rounds, ten samples, 1s warmup and
+3s measurement; 180s/16GiB caps and existing 10 percent gates remain unchanged.
+Capture nested baseline/candidate Samply profiles and inspect the existing flat
+profile's allocation callers. Distinguish failed block speculation, continuing
+iterator/grammar overhead, and allocation/output costs before editing production.
+The sampled VmHWM baseline varied 13.44 percent; distinguish sampling loss from
+real process variation by cross-checking terminal process peak RSS when available.
+No allocator substitution, output ownership change, dependencies or Core files.
+Extend existing orchestration and artifacts, without a new worktree. If evidence
+supports a small fix, add targeted parity/rollback tests and paired affected cells;
+otherwise retain b8a0545 and report the discriminating result. ETA 15--20 minutes,
+including compilation/profile elevation if needed. Master integration remains gated.
+
+\paragraph{Measured allocation callers, 2026-09-11 02:03 +02:00.}
+The nested slowdown reproduces at 6.87 percent. Linked's original /proc polling
+misses the final peak: a small GNU time supervisor captures stable terminal peaks
+(60874752/60751872 bytes baseline, 61030400/60952576 retained). The unchanged gate
+passes, peak ratio 1.00256. Direct wait4 from the large Python parent is not used
+for acceptance because its pre-exec memory can create an inherited RSS floor.
+The final flat profile attributes 996 system-leaf samples to StreamingRecordBuilder
+accept, of which 534 traverse vector growth, and 312 to begin\_node, among 3540 decode
+samples. Test a narrow consumer-only compiler-inlining hypothesis: mark the two
+existing accept methods inline so known leaf/node enum variants can be specialized
+at their callers. No semantic, allocation-policy, ownership or API changes. Reuse
+b8a0545 as control; first native targeted correctness and scale smoke, then flat,
+nested, linked and Unicode paired controls. Reject if no useful stable improvement
+or if any existing time/RSS gate fails. Nested profiling remains pending Windows UAC.
+
+\paragraph{Follow-up disposition, 2026-09-11 02:09 +02:00.}
+The 20-cell inline discriminator passes all five unchanged regression gates but
+changes medians by only -0.47 percent flat, -0.58 nested, +0.26 linked, -0.24
+Unicode and -0.20 long text. Reject and revert the two hints; the retained runtime
+source remains byte-identical to b8a0545. The candidate passed all 37 native targeted
+correctness tests; the allocation-profile test remained ignored. The terminal-RSS
+supervisor resolves the linked memory uncertainty for the measured revision pair;
+older sampling-only evidence is preserved, not rewritten. Windows Samply never
+started its nested cells because UAC was not approved; the pending recorder was
+stopped at 02:07 with no profile output. The nested slowdown's precise CPU cause
+therefore remains open, and master integration is still deferred. Existing flat
+profiles identify output-construction callers, not exact allocation counts. Archive
+all experiments and source snapshots, including both ineffective RSS probes and the
+rejected inline candidate. No retained source/API/dependency change in this follow-up.
+
 \begin{center}\input{plan.tikz}\end{center}
 \end{document}

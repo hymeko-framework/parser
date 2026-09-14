@@ -4,3 +4,6 @@
 .DS_Store
 __pycache__/
 *.pyc
+
+# Task reports are archived to Samba after each task.
+reports/

@@ -34,3 +34,13 @@ flowchart TD
     B2 --> D2[Direct owned records: deferred semantic errors]
     A2 --> X2[Parity, ownership, AST and record performance gates]
     D2 --> X2
+
+    D2 --> C3[ConstructionBuilder: incremental bodies, blocks and references]
+    C3 --> R3[Full grammar and canonical AST compatibility checks]
+    R3 --> J3[Matched 50k decoding: long text beats JSON; four gaps remain]
+
+    J3 --> F4[Opt-in literal_arc: lexer checkpoint and complete-arc token]
+    F4 --> C4[Canonical grammar generates private backend; default AST unchanged]
+    C4 --> O4[Transfer compact buffers into owned links]
+    O4 --> G4[All-pattern latency and RSS gates; canonical errors and dyn compatibility]
+    G4 --> P4[Candidate: CPU profile approval still pending]

@@ -10,10 +10,28 @@ fn is_ident_start(c: u8) -> bool {
 }
 
 /// Length of the prefix containing neither a quote nor an escape introducer.
-/// Safe word loads skip eight bytes at a time, including arbitrary UTF-8 bytes.
+/// Bounded vector/word loads skip ordinary runs, including arbitrary UTF-8 bytes.
 #[inline]
 fn string_prefix_len(bytes: &[u8]) -> usize {
     let mut i = 0;
+    #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+    {
+        use std::arch::x86_64::*;
+        while let Some(chunk) = bytes[i..].first_chunk::<16>() {
+            // SAFETY: SSE2 is enabled for this target; chunk contains all sixteen
+            // bytes read by the unaligned load. No byte beyond the slice is read.
+            let mask = unsafe {
+                let word = _mm_loadu_si128(chunk.as_ptr().cast());
+                let quote = _mm_cmpeq_epi8(word, _mm_set1_epi8(b'"' as i8));
+                let escape = _mm_cmpeq_epi8(word, _mm_set1_epi8(b'\\' as i8));
+                _mm_movemask_epi8(_mm_or_si128(quote, escape)) as u32
+            };
+            if mask != 0 {
+                return i + mask.trailing_zeros() as usize;
+            }
+            i += 16;
+        }
+    }
     let has_zero =
         |word: u64| word.wrapping_sub(0x0101_0101_0101_0101) & !word & 0x8080_8080_8080_8080 != 0;
     while let Some(chunk) = bytes[i..].first_chunk::<8>() {
@@ -171,7 +189,7 @@ pub trait CommonLexer<'a> {
     #[inline(always)]
     fn lex_string(&mut self, start: usize) -> Result<Token<'a>, LexError> {
         let mut i = self.pos(); // self.pos() is already at start + 1
-        let mut has_escape = false;
+        let mut first_escape = None;
         let len = self.len();
 
         // Skip ordinary runs without changing lexer position on an error.
@@ -183,13 +201,16 @@ pub trait CommonLexer<'a> {
             if c == b'"' {
                 break;
             } else {
-                has_escape = true;
+                first_escape.get_or_insert(i);
                 i += 2; // Skip the backslash and the escaped character
             }
         }
 
         if i >= len || self.byte_at(i) != Some(b'"') {
-            return Err(LexError { at: start, msg: "Unterminated string literal".into() });
+            return Err(LexError {
+                at: start,
+                msg: "Unterminated string literal".into(),
+            });
         }
 
         let end = i;
@@ -198,37 +219,37 @@ pub trait CommonLexer<'a> {
         let token = {
             let b = self.bytes();
             // CORRECTED: Start at `start + 1` to exclude the opening quote
-            let slice = &b[start + 1 .. end];
+            let slice = &b[start + 1..end];
 
-            if !has_escape {
-                let text = unsafe { std::str::from_utf8_unchecked(slice) };
-                Token::Str(std::borrow::Cow::Borrowed(text))
-            } else {
+            if let Some(first_escape) = first_escape {
                 // Preserve UTF-8 bytes on the escaped path too. Casting each
                 // byte to char corrupts non-ASCII text whenever any escape occurs.
                 let mut out = Vec::with_capacity(slice.len());
-                let mut j = 0;
+                let mut j = first_escape - start - 1;
+                out.extend_from_slice(&slice[..j]);
                 while j < slice.len() {
-                    if slice[j] == b'\\' && j + 1 < slice.len() {
-                        match slice[j + 1] {
-                            b'n' => out.push(b'\n'),
-                            b'r' => out.push(b'\r'),
-                            b't' => out.push(b'\t'),
-                            b'\\' => out.push(b'\\'),
-                            b'"' => out.push(b'"'),
-                            other => out.push(other),
-                        }
-                        j += 2;
-                    } else {
-                        out.push(slice[j]);
-                        j += 1;
+                    // The delimiter scan proved this is a complete escape.
+                    match slice[j + 1] {
+                        b'n' => out.push(b'\n'),
+                        b'r' => out.push(b'\r'),
+                        b't' => out.push(b'\t'),
+                        b'\\' => out.push(b'\\'),
+                        b'"' => out.push(b'"'),
+                        other => out.push(other),
                     }
+                    j += 2;
+                    let next = j + string_prefix_len(&slice[j..]);
+                    out.extend_from_slice(&slice[j..next]);
+                    j = next;
                 }
                 let text = String::from_utf8(out).map_err(|_| LexError {
                     at: start,
                     msg: "Invalid UTF-8 in string literal".into(),
                 })?;
                 Token::Str(std::borrow::Cow::Owned(text)) // Heap allocation only when strictly required.
+            } else {
+                let text = unsafe { std::str::from_utf8_unchecked(slice) };
+                Token::Str(std::borrow::Cow::Borrowed(text))
             }
         };
 
@@ -316,6 +337,100 @@ pub fn next_token<'a, L: CommonLexer<'a>>(lex: &mut L) -> Option<LexItem<'a>> {
 #[cfg(test)]
 mod tests {
     use super::string_prefix_len;
+
+    #[test]
+    fn string_prefix_matches_oracle_at_unaligned_vector_boundaries() {
+        for offset in 0..16 {
+            for len in 0..=96 {
+                let mut storage: Vec<u8> = (0..offset + len)
+                    .map(|i| [0xff, 0x80, b'a', 0, b'!', b']'][i % 6])
+                    .collect();
+                for delimiter in [b'"', b'\\'] {
+                    for position in 0..=len {
+                        let old = storage.get(offset + position).copied();
+                        if let Some(byte) = storage.get_mut(offset + position) {
+                            *byte = delimiter;
+                        }
+                        let input = &storage[offset..];
+                        let expected = input
+                            .iter()
+                            .position(|&b| b == b'"' || b == b'\\')
+                            .unwrap_or(input.len());
+                        assert_eq!(
+                            string_prefix_len(input), expected,
+                            "offset={offset} len={len} position={position}"
+                        );
+                        if let Some(old) = old {
+                            storage[offset + position] = old;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn escaped_runs_match_character_oracle_and_preserve_spans() {
+        use crate::lexer::Token;
+        use crate::lexer::simd::{CoreLexer, ScalarLexer};
+        use std::borrow::Cow;
+
+        for padding in 0..=40 {
+            for escape in ["\\n", "\\r", "\\t", "\\\\", "\\\"", "\\q", "\\é", "\\🙂"] {
+                for middle in ["", "ascii", "árvíz日本語🙂", "\0\n\t"] {
+                    let body = format!(
+                        "{}{}{}{}{}",
+                        "a".repeat(padding),
+                        escape,
+                        middle,
+                        escape,
+                        "z".repeat(padding)
+                    );
+                    // Decode Unicode scalar values, independently of the byte-run scanner.
+                    let mut expected = String::new();
+                    let mut chars = body.chars();
+                    while let Some(ch) = chars.next() {
+                        expected.push(if ch == '\\' {
+                            match chars.next().unwrap() {
+                                'n' => '\n',
+                                'r' => '\r',
+                                't' => '\t',
+                                other => other,
+                            }
+                        } else {
+                            ch
+                        });
+                    }
+                    let source = format!("  \"{body}\";");
+                    let mut lexer = ScalarLexer(CoreLexer::new(&source));
+                    let (start, token, end) = lexer.next().unwrap().unwrap();
+                    assert_eq!((start, end), (2, source.len() - 1));
+                    assert!(matches!(&token, Token::Str(Cow::Owned(_))));
+                    assert_eq!(token, Token::Str(Cow::Owned(expected)));
+                    assert_eq!(lexer.next(), Some(Ok((end, Token::Semi, end + 1))));
+                    assert_eq!(lexer.next(), None);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unterminated_escaped_runs_preserve_error_and_cursor() {
+        use super::CommonLexer;
+        use crate::lexer::simd::{CoreLexer, ScalarLexer};
+
+        for padding in 0..=40 {
+            for tail in ["", "\\", "\\\"", "\\n日本語", "\\🙂"] {
+                let source = format!("  \"{}{}", "é".repeat(padding), tail);
+                let mut lexer = ScalarLexer(CoreLexer::new(&source));
+                let error = lexer.next().unwrap().unwrap_err();
+                assert_eq!(error.at, 2);
+                assert_eq!(error.msg, "Unterminated string literal");
+                // Failure must leave the cursor immediately after the opening quote.
+                assert_eq!(lexer.pos(), 3);
+            }
+        }
+    }
 
     #[test]
     fn string_prefix_matches_scalar_for_bytes_lanes_and_tails() {

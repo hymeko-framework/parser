@@ -13,7 +13,7 @@ Extracted by grammar -- tree-sitter for Rust and C++, `ast` for Python -- so tha
 `pub(crate)`, a `pub fn` inside a private `mod`, and a `def` written inside a
 docstring are all excluded for a stated reason rather than by luck.
 
-**2 package(s), 66 public symbol(s).**
+**2 package(s), 75 public symbol(s).**
 
 ## parser (rust)
 
@@ -24,6 +24,7 @@ docstring are all excluded for a stated reason rather than by luck.
 ### traits
 
 - `CommonLexer` — `src/lexer/common.rs`
+- `ConstructionBuilder` — `src/builder.rs`
 - `OutputBuilder` — `src/builder.rs`
 - `__ToTriple` — `src/lib.rs`
 
@@ -47,6 +48,7 @@ docstring are all excluded for a stated reason rather than by luck.
 - `LexError` — `src/lexer/token.rs`
 - `Lexer` — `src/lexer/simple.rs`
 - `Link` — `benches/formats/model.rs`
+- `LiteralReference` — `src/builder.rs`
 - `NodeInner` — `src/ast.rs`
 - `QueryVarParser` — `src/lib.rs`
 - `Record` — `benches/formats/model.rs`
@@ -73,11 +75,15 @@ docstring are all excluded for a stated reason rather than by luck.
 
 ### functions
 
+- `as_ptr` — `src/fusion/workspace.rs`
+- `clear` — `src/fusion/workspace.rs`
 - `decode` — `benches/formats/adapters.rs`
 - `document` — `benches/formats/adapters.rs`
 - `encode` — `benches/formats/adapters.rs`
 - `from_hymeko` — `benches/formats/adapters.rs`
 - `generate` — `benches/formats/model.rs`
+- `is_empty` — `src/fusion/workspace.rs`
+- `iter_mut` — `src/fusion/workspace.rs`
 - `name` — `benches/formats/adapters.rs`
 - `name` — `benches/formats/model.rs`
 - `new` — `src/lexer/simd.rs`
@@ -85,13 +91,16 @@ docstring are all excluded for a stated reason rather than by luck.
 - `next_token` — `src/lexer/common.rs`
 - `parse` — `benches/formats/model.rs`
 - `parse_description` — `src/lib.rs`
+- `parse_description_into` — `src/lib.rs`
 - `parse_description_with` — `src/lib.rs`
 - `parse_name` — `benches/formats/adapters.rs`
 - `parse_query_var` — `src/lib.rs`
 - `prepare` — `benches/formats/mod.rs`
 - `read_source_file` — `src/lib.rs`
 - `records` — `benches/formats/model.rs`
+- `try_push` — `src/fusion/workspace.rs`
 - `validate` — `benches/formats/model.rs`
+- `with_blocks` — `src/fusion.rs`
 
 ## scripts (python)
 

@@ -2,6 +2,7 @@
 name = "parser"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [build-dependencies]
 lalrpop = ">=0.22.2"
@@ -19,6 +20,8 @@ blake3 = "1"
 [[bench]]
 name = "parser_bench"
 harness = false
+test = false
 [[bench]]
 name = "format_bench"
 harness = false
+test = false

@@ -4,9 +4,500 @@ mod formats;
 use formats::adapters::Format;
 use formats::model::{Dataset, Pattern};
 
+struct FusedAst<const ARCS: bool = true, const BLOCKS: bool = false>;
+impl<'a, const ARCS: bool, const BLOCKS: bool> parser::builder::OutputBuilder<'a>
+    for FusedAst<ARCS, BLOCKS>
+{
+    fn fuse_literal_blocks(&self) -> bool {
+        BLOCKS
+    }
+    fn fuse_literal_arcs(&self) -> bool {
+        ARCS
+    }
+    type Item = parser::ast::HyperItem<'a, &'a str>;
+    type Output = parser::ast::AstStr<'a>;
+    fn node(&mut self, node: parser::builder::NodeInput<'a, Self::Item>) -> Self::Item {
+        parser::builder::AstBuilder.node(node)
+    }
+    fn edge(&mut self, edge: parser::builder::EdgeInput<'a, Self::Item>) -> Self::Item {
+        parser::builder::AstBuilder.edge(edge)
+    }
+    fn arc(&mut self, arc: parser::ast::HyperArc<'a, &'a str>) -> Self::Item {
+        parser::builder::AstBuilder.arc(arc)
+    }
+    fn description(
+        &mut self,
+        input: parser::builder::DescriptionInput<'a, Self::Item>,
+    ) -> Self::Output {
+        parser::builder::AstBuilder.description(input)
+    }
+}
+
+#[test]
+fn output_builder_remains_object_safe() {
+    use parser::builder::{AstBuilder, OutputBuilder};
+    let builder: &mut dyn OutputBuilder<
+        '_,
+        Item = parser::ast::HyperItem<'_, &str>,
+        Output = parser::ast::AstStr<'_>,
+    > = &mut AstBuilder;
+    assert!(!builder.fuse_literal_arcs());
+    assert!(!builder.fuse_literal_blocks());
+}
+
+#[test]
+fn iterative_literal_blocks_preserve_contexts_values_and_diagnostics() {
+    let mixed = "T{} first{x 1;} parent{x 2; child{z 3;}} next{x 4;} @e{(+a[1]);}";
+    assert_eq!(
+        parser::parse_description_with(mixed, &mut FusedAst::<true, true>),
+        parser::parse_description(mixed)
+    );
+    for field in [
+        "",
+        "x 1;",
+        "x -0.0; y \"escaped\\n\\\"\";",
+        "x 1; x 2;",
+        "x<tag> 1;",
+        "x [1];",
+        "x ->a;",
+        "child{}",
+        "@e{}",
+        "x (1+2);",
+        "x 1",
+        "x \"unterminated",
+        "x -;",
+        "x 1; @",
+    ] {
+        for source in [
+            format!("T{{}} n{{{field}}}"),
+            format!("T{{x 1;}} n{{{field}}} next{{z 2;}}"),
+            format!("T{{}} outer{{n{{{field}}} child{{}}}}"),
+            format!("T{{}} @edge{{n{{{field}}}}}"),
+            format!("T{{}} n:base{{{field}}}"),
+            format!("T{{}} n<tag>{{{field}}}"),
+            format!("T{{n{{{field}}}}}"),
+            format!("T{{}} (+a[1]); n{{{field}}} @"),
+        ] {
+            let expected = parser::parse_description(&source);
+            for actual in [
+                parser::parse_description_with(&source, &mut FusedAst::<false, true>),
+                parser::parse_description_with(&source, &mut FusedAst::<true, true>),
+            ] {
+                assert_eq!(actual, expected, "{source}");
+            }
+        }
+    }
+    for count in [1, 2, 3, 257, 4096] {
+        let fields = (0..count).map(|i| format!("f{i} {i};")).collect::<String>();
+        let source = format!("T{{}} n{{{fields}}} next{{text \"ok\";}}");
+        assert_eq!(
+            parser::parse_description_with(&source, &mut FusedAst::<true, true>),
+            parser::parse_description(&source)
+        );
+    }
+}
+
+#[test]
+fn canonical_error_validation_does_not_replay_builder_callbacks() {
+    use parser::builder::{DescriptionInput, EdgeInput, NodeInput, OutputBuilder};
+    struct Arcs(usize);
+    impl<'a> OutputBuilder<'a> for Arcs {
+        type Item = ();
+        type Output = ();
+        fn fuse_literal_arcs(&self) -> bool {
+            true
+        }
+        fn fuse_literal_blocks(&self) -> bool {
+            true
+        }
+        fn node(&mut self, _: NodeInput<'a, ()>) {
+            self.0 += 1;
+        }
+        fn edge(&mut self, _: EdgeInput<'a, ()>) {}
+        fn arc(&mut self, _: parser::ast::HyperArc<'a, &'a str>) {
+            self.0 += 1;
+        }
+        fn description(&mut self, _: DescriptionInput<'a, ()>) {}
+    }
+    let source = "T{} (+a[1]); @";
+    let mut builder = Arcs(0);
+    let actual = parser::parse_description_with(source, &mut builder).unwrap_err();
+    assert_eq!(actual, parser::parse_description(source).unwrap_err());
+    assert_eq!(builder.0, 1);
+    let source = "T{} n{x 1;} @";
+    let mut builder = Arcs(0);
+    let actual = parser::parse_description_with(source, &mut builder).unwrap_err();
+    assert_eq!(actual, parser::parse_description(source).unwrap_err());
+    assert_eq!(builder.0, 2, "one leaf and one node, without callback replay");
+}
+
+#[test]
+fn fused_reference_shapes_match_canonical_ast_and_errors() {
+    use parser::hymeko::DescriptionParser;
+    use parser::lexer::simd::{CoreLexer, ScalarLexer};
+    for sign in ["+", "-", "~"] {
+        for path in ["a", "a.b", "<tag>a", "a<tag>"] {
+            for weight in [
+                "[1]", "[-0.0]", "[1,]", "[1,2]", "[]", "[[1]]", "[\"x\"]", "[", "[-", "[1",
+            ] {
+                let reference = format!("{sign}{path} /*gap*/ {weight}");
+                for source in [
+                    format!("T{{}} ({reference});"),
+                    format!("T{{}} n:{reference}{{}}"),
+                    format!("T{{}} n{{ @e{{({reference});}} }}"),
+                    format!("T{{const x=(1{reference});}}"),
+                    format!("T{{}} ({reference},+b[2]); @"),
+                ] {
+                    let expected =
+                        DescriptionParser::new().parse(ScalarLexer(CoreLexer::new(&source)));
+                    assert_eq!(
+                        parser::parse_description_with(&source, &mut FusedAst::<true>),
+                        expected,
+                        "{source}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn fused_arc_large_groups_and_malformed_tails_match_canonical() {
+    for count in [1, 2, 8, 257, 4096] {
+        let refs = (0..count)
+            .map(|i| format!("+n{i}[1]"))
+            .collect::<Vec<_>>()
+            .join(",");
+        for suffix in [");", ",);", ")<tag>;", ",+bad[", ",+bad[1]@);", "); @"] {
+            let source = format!("T{{}} @links{{({refs}{suffix}}}");
+            assert_eq!(
+                parser::parse_description_with(&source, &mut FusedAst::<true>),
+                parser::parse_description(&source),
+                "count={count}, suffix={suffix}"
+            );
+        }
+    }
+}
+
+#[test]
+fn arc_opt_in_preserves_other_syntax_and_can_be_disabled() {
+    for value in [
+        "1",
+        "-0.0",
+        "-3.5",
+        "1+2",
+        "(1+2)",
+        "[1]",
+        "\"plain\"",
+        "\"escaped\\n\\\"\"",
+        "\"unterminated",
+        "true",
+        "?query",
+        "->target",
+    ] {
+        for tags in ["", "<tag>", "<tag,tag>"] {
+            for suffix in [";", "; @", "{}", "; child;", "; (+child[1]);"] {
+                let source = format!("T{{}} leaf {tags} {value}{suffix}");
+                let expected = parser::parse_description(&source);
+                assert_eq!(
+                    parser::parse_description_with(&source, &mut FusedAst::<false>),
+                    expected
+                );
+                assert_eq!(
+                    parser::parse_description_with(&source, &mut FusedAst::<true>),
+                    expected
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn incremental_construction_preserves_scope_order_and_deep_inputs() {
+    use parser::ast::{Anno, HeaderBlock, SignedRef};
+    use parser::builder::ConstructionBuilder;
+    #[derive(Default)]
+    struct Counter(Vec<String>);
+    impl<'a> ConstructionBuilder<'a> for Counter {
+        fn fuse_literal_blocks(&self) -> bool {
+            true
+        }
+        fn fuse_literal_arcs(&self) -> bool {
+            true
+        }
+        type Item = usize;
+        type Items = usize;
+        type Reference = SignedRef<'a, &'a str>;
+        type Path = parser::ast::Ref<&'a str>;
+        type Block = &'a str;
+        type Output = usize;
+        fn begin_node(
+            &mut self,
+            name: &'a str,
+            _: Anno<'a, &'a str>,
+            _: Vec<Self::Reference>,
+        ) -> Self::Block {
+            self.0.push(format!("open node {name}"));
+            name
+        }
+        fn begin_edge(
+            &mut self,
+            name: &'a str,
+            _: Anno<'a, &'a str>,
+            _: Vec<Self::Reference>,
+        ) -> Self::Block {
+            self.0.push(format!("open edge {name}"));
+            name
+        }
+        fn empty_items(&mut self) -> usize {
+            0
+        }
+        fn one_item(&mut self, item: usize) -> usize {
+            item
+        }
+        fn two_items(&mut self, a: usize, b: usize) -> usize {
+            a + b
+        }
+        fn push_item(&mut self, items: &mut usize, item: usize) {
+            *items += item;
+        }
+        fn finish_leaf(&mut self, name: &'a str, _: Anno<'a, &'a str>) -> usize {
+            self.0.push(format!("node {name}"));
+            1
+        }
+        fn finish_node(&mut self, name: Self::Block, body: usize) -> usize {
+            self.0.push(format!("node {name}"));
+            1 + body
+        }
+        fn finish_edge(&mut self, name: Self::Block, body: usize) -> usize {
+            self.0.push(format!("edge {name}"));
+            1 + body
+        }
+        fn path(&mut self, name: &'a str) -> Self::Path {
+            parser::builder::AstBuilder.path(name)
+        }
+        fn path_push(&mut self, path: &mut Self::Path, name: &'a str) {
+            parser::builder::AstBuilder.path_push(path, name);
+        }
+        fn canonical_path(&mut self, path: Self::Path) -> parser::ast::Ref<&'a str> {
+            path
+        }
+        fn finish_reference(
+            &mut self,
+            sign: i8,
+            target: parser::ast::Ref<&'a str>,
+            anno: Anno<'a, &'a str>,
+        ) -> Self::Reference {
+            parser::builder::AstBuilder.finish_reference(sign, target, anno)
+        }
+        fn finish_arc(&mut self, _: Anno<'a, &'a str>, _: Vec<Self::Reference>) -> usize {
+            self.0.push("arc".into());
+            1
+        }
+        fn finish_description(&mut self, _: &'a str, _: HeaderBlock<'a>, items: usize) -> usize {
+            self.0.push("description".into());
+            items
+        }
+    }
+    let mut counter = Counter::default();
+    assert_eq!(
+        parser::parse_description_into("T{header;} a; n{b; @e{(+x[1]);}} c;", &mut counter),
+        Ok(6)
+    );
+    assert_eq!(
+        counter.0,
+        [
+            "node a",
+            "open node n",
+            "node b",
+            "open edge e",
+            "arc",
+            "edge e",
+            "node n",
+            "node c",
+            "description"
+        ]
+    );
+    for count in 0..=4 {
+        assert_eq!(
+            parser::parse_description_into(
+                &format!("T{{}} {}", "n;".repeat(count)),
+                &mut Counter::default()
+            ),
+            Ok(count)
+        );
+    }
+    let mut failed = Counter::default();
+    assert!(parser::parse_description_into("T{} n{leaf; @", &mut failed).is_err());
+    assert_eq!(failed.0, ["open node n", "node leaf"]);
+    let deep = format!("T{{}} {}leaf;{}", "n{".repeat(1024), "}".repeat(1024));
+    assert_eq!(
+        parser::parse_description_into(&deep, &mut Counter::default()),
+        Ok(1025)
+    );
+}
+
+#[test]
+fn incremental_values_preserve_headers_lists_and_reference_errors() {
+    for value in [
+        "0", "-0.0", "[]", "[1]", "[-0.0,]", "[1,2]", "[[1]]", "[[1],2]", "[1,[2]]", "a.b",
+        "(1+2)", "\"x\"", "[\"x\"]",
+    ] {
+        for field in [
+            format!("value {value}; text \"ok\";"),
+            format!("value 1; text {value};"),
+            format!("value 1; text \"ok\"; @refs{{(+a.b.c {value});}}"),
+        ] {
+            for header in [
+                String::new(),
+                format!("h<tag,tag> {value}; using a.b as c;"),
+            ] {
+                let source = format!("Test{{{header}}} root: +base [3] {{{field}}}");
+                let expected = parser::parse_description(&source)
+                    .map_err(|e| format!("{e:?}"))
+                    .and_then(Dataset::from_hymeko);
+                assert_eq!(Format::Hymeko.decode(&source), expected, "{source}");
+            }
+        }
+    }
+}
+
+#[test]
+fn recursive_shapes_match_legacy_parser() {
+    use parser::hymeko::DescriptionParser;
+    use parser::lexer::simd::{CoreLexer, ScalarLexer};
+    for depth in [1, 2, 8, 16, 32, 64] {
+        for (open, close, leaf) in [("n{", "}", "leaf;"), ("[", "]", "1")] {
+            let body = format!("{}{}{}", open.repeat(depth), leaf, close.repeat(depth));
+            let source = if open == "[" {
+                format!("Test{{}} n {body};")
+            } else {
+                format!("Test{{}} {body}")
+            };
+            let legacy = DescriptionParser::new().parse(ScalarLexer(CoreLexer::new(&source)));
+            assert_eq!(parser::parse_description(&source), legacy, "depth={depth}");
+        }
+    }
+}
+
+#[test]
+fn record_builder_transfers_compact_link_buffers_without_retaining_slack() {
+    use formats::adapters::{BuiltItem, RecordBuilder};
+    use formats::model::Link;
+    use parser::ast::{Anno, Value};
+    use parser::builder::{DeclarationBody, EdgeInput, NodeInput, OutputBuilder};
+
+    for count in [1, 2, 8, 17] {
+        for slack in [0, 128] {
+            let mut links = Vec::with_capacity(count + slack);
+            links.extend((0..count).map(|i| Link {
+                target: format!("n{i}"),
+                sign: 1,
+                weight: i as f64,
+            }));
+            let original = links.clone();
+            let pointer = links.as_ptr();
+            let mut builder = RecordBuilder;
+            let edge = builder.edge(EdgeInput {
+                anno: Anno::default(),
+                inner: DeclarationBody {
+                    name: "refs",
+                    bases: Vec::new(),
+                    body: vec![
+                        BuiltItem::Arc(Ok(Vec::with_capacity(128))),
+                        BuiltItem::Arc(Ok(links)),
+                        BuiltItem::Arc(Ok(Vec::new())),
+                    ],
+                },
+            });
+            let BuiltItem::Edge(_, Ok(edge_links)) = &edge else {
+                panic!("edge")
+            };
+            assert_eq!(edge_links, &original);
+            if slack == 0 {
+                assert_eq!(edge_links.as_ptr(), pointer, "arc buffer should transfer");
+            }
+            assert!(edge_links.capacity() <= count.max(4));
+            let edge_pointer = edge_links.as_ptr();
+            let node = builder.node(NodeInput {
+                anno: Anno::default(),
+                inner: DeclarationBody {
+                    name: "root",
+                    bases: Vec::new(),
+                    body: Some(vec![
+                        BuiltItem::Leaf("value", Some(Value::Num(1.0))),
+                        BuiltItem::Leaf("text", Some(Value::Str("text".into()))),
+                        edge,
+                    ]),
+                },
+            });
+            let BuiltItem::Node(_, Ok(record)) = node else {
+                panic!("record")
+            };
+            assert_eq!(record.link, original);
+            assert_eq!(
+                record.link.as_ptr(),
+                edge_pointer,
+                "edge buffer should transfer"
+            );
+            assert!(record.link.capacity() <= count.max(4));
+        }
+    }
+}
+
 #[test]
 fn direct_builder_matches_owned_records_and_error_precedence() {
     use formats::adapters::RecordBuilder;
+    for pattern in Pattern::ALL {
+        for count in [0, 1, 2, 17, 1000] {
+            let expected = Dataset::generate(pattern, count);
+            let source = Format::Hymeko.encode(&expected).unwrap();
+            let direct = RecordBuilder::decode(&source).unwrap();
+            assert_eq!(direct, expected);
+            assert_eq!(Format::Hymeko.decode(&source).unwrap(), expected);
+        }
+    }
+    let bodies = [
+        "",
+        "value 1;",
+        "text \"a\";",
+        "value 1; text \"a\";",
+        "value 1; value 2; text \"a\";",
+        "value \"bad\"; text 3;",
+        "value 1; text \"a\"; text \"b\";",
+        "value{} text \"a\";",
+        "value 1; text{value 3; text \"b\";}",
+        "child;",
+        "child{}",
+        "@refs{(+a [1],-b [-0.0]);}",
+        "value 1; text \"a\"; @refs{(+a [1]);(-b [2]);} @refs{(~c [3]);}",
+        "@refs{(+a);}",
+        "value 1; text \"a\"; @refs{(+a.b.c [1], -<tag>x.y<other> [2]);}",
+        "@refs{not_an_arc;} value \"bad\";",
+        "@other{(+a);}",
+        "value -0.0; text \"é\\n🙂\"; @refs{(+a [2]);} @refs{(-b [3]);}",
+    ];
+    for name in ["root", "value", "text"] {
+        for body in bodies {
+            for suffix in ["", " @", " \"unfinished", " other;"] {
+                let source = format!("Test{{}} {name}{{{body}}}{suffix}");
+                let original = parser::parse_description(&source)
+                    .map_err(|e| format!("{e:?}"))
+                    .and_then(Dataset::from_hymeko);
+                assert_eq!(RecordBuilder::decode(&source), original, "{source}");
+                assert_eq!(
+                    Format::Hymeko.decode(&source),
+                    original,
+                    "streaming: {source}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "allocation profile; explicit opt-in with --ignored --exact"]
+fn direct_builder_retained_storage_profile() {
     fn retained_bytes(data: &Dataset) -> usize {
         use formats::model::{Link, Record};
         let mut total = data.node.capacity() * std::mem::size_of::<Record>();
@@ -25,51 +516,17 @@ fn direct_builder_matches_owned_records_and_error_precedence() {
         total
     }
     for pattern in Pattern::ALL {
-        for count in [0, 1, 2, 17, 1000] {
-            let expected = Dataset::generate(pattern, count);
-            let source = Format::Hymeko.encode(&expected).unwrap();
-            let direct = RecordBuilder::decode(&source).unwrap();
-            assert_eq!(direct, expected);
-            if count == 1000 {
-                let original =
-                    Dataset::from_hymeko(parser::parse_description(&source).unwrap()).unwrap();
-                assert!(retained_bytes(&direct) <= retained_bytes(&original));
-                println!(
-                    "RETAINED {pattern:?}: original={} direct={}",
-                    retained_bytes(&original),
-                    retained_bytes(&direct)
-                );
-            }
-        }
-    }
-    let bodies = [
-        "",
-        "value 1;",
-        "text \"a\";",
-        "value 1; text \"a\";",
-        "value 1; value 2; text \"a\";",
-        "value \"bad\"; text 3;",
-        "value 1; text \"a\"; text \"b\";",
-        "value{} text \"a\";",
-        "value 1; text{value 3; text \"b\";}",
-        "child;",
-        "child{}",
-        "@refs{(+a [1],-b [-0.0]);}",
-        "@refs{(+a);}",
-        "@refs{not_an_arc;} value \"bad\";",
-        "@other{(+a);}",
-        "value -0.0; text \"é\\n🙂\"; @refs{(+a [2]);} @refs{(-b [3]);}",
-    ];
-    for name in ["root", "value", "text"] {
-        for body in bodies {
-            for suffix in ["", " @", " \"unfinished", " other;"] {
-                let source = format!("Test{{}} {name}{{{body}}}{suffix}");
-                let original = parser::parse_description(&source)
-                    .map_err(|e| format!("{e:?}"))
-                    .and_then(Dataset::from_hymeko);
-                assert_eq!(RecordBuilder::decode(&source), original, "{source}");
-            }
-        }
+        let expected = Dataset::generate(pattern, 1000);
+        let source = Format::Hymeko.encode(&expected).unwrap();
+        let direct = Format::Hymeko.decode(&source).unwrap();
+        let original = Dataset::from_hymeko(parser::parse_description(&source).unwrap()).unwrap();
+        assert_eq!(direct, expected);
+        assert!(retained_bytes(&direct) <= retained_bytes(&original));
+        println!(
+            "RETAINED {pattern:?}: original={} direct={}",
+            retained_bytes(&original),
+            retained_bytes(&direct)
+        );
     }
 }
 
@@ -134,6 +591,10 @@ fn custom_builder_and_legacy_token_callers_keep_their_contracts() {
         incomplete.0 > 0,
         "callbacks before a syntax error are not rolled back"
     );
+    assert_eq!(
+        incomplete.0, 2,
+        "diagnostic validation must not replay user callbacks"
+    );
     struct CustomError;
     impl<'a> __ToTriple<'a> for CustomError {
         fn to_triple(self) -> Result<(usize, Token<'a>, usize), parser::ParseError<'a>> {
@@ -168,6 +629,10 @@ fn declaration_reductions_preserve_ast_and_diagnostics() {
             for suffix in ["", ";", "}", "@", " [", " \"unterminated"] {
                 let input = format!("{}{suffix}", &source[..end]);
                 let result = parser::parse_description(&input);
+                assert_eq!(
+                    parser::parse_description_with(&input, &mut FusedAst::<true>),
+                    result
+                );
                 accepted += usize::from(result.is_ok());
                 rejected += usize::from(result.is_err());
                 digest.update(format!("{input:?}\n{result:?}\n").as_bytes());
@@ -418,7 +883,7 @@ fn escaped_unicode_agrees_across_lexer_tiers() {
 #[test]
 fn separated_lists_preserve_order_and_trailing_separator_rules() {
     use parser::ast::{HyperItem, SignedRef, Value};
-    for count in [1, 2, 8, 257] {
+    for count in [1, 2, 3, 4, 7, 8, 9, 16, 17, 257, 1025] {
         let names: Vec<_> = (0..count).map(|i| format!("n{i}")).collect();
         let tags = names.join(",");
         let path = names.join(".");

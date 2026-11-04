@@ -9,6 +9,7 @@
 
 pub mod ast;
 pub mod builder;
+mod fusion;
 pub mod lexer;
 
 // LALRPOP-generated parser. We expand what `lalrpop_mod!(pub hymeko)` does
@@ -20,6 +21,16 @@ pub mod lexer;
 #[allow(clippy::all, dead_code, unused_imports)]
 mod grammar {
     include!(concat!(env!("OUT_DIR"), "/hymeko.rs"));
+}
+
+#[allow(clippy::all, dead_code, unused_imports)]
+mod fast_grammar {
+    include!(concat!(env!("OUT_DIR"), "/fast.rs"));
+}
+
+#[allow(clippy::all, dead_code, unused_imports)]
+mod block_grammar {
+    include!(concat!(env!("OUT_DIR"), "/blocks.rs"));
 }
 
 /// Compatibility facades for callers supplying their own token iterator.
@@ -39,8 +50,8 @@ pub mod hymeko {
 
     struct TokenInput<T>(T);
 
-    impl<'a, B: crate::builder::OutputBuilder<'a>, T: __ToTriple<'a>> grammar::__ToTriple<'a, B>
-        for TokenInput<T>
+    impl<'a, B: crate::builder::ConstructionBuilder<'a>, T: __ToTriple<'a>>
+        grammar::__ToTriple<'a, B> for TokenInput<T>
     {
         fn to_triple(self) -> Result<(usize, Token<'a>, usize), ParseError<'a>> {
             self.0.to_triple()
@@ -87,7 +98,7 @@ use std::io;
 use std::path::Path;
 
 use crate::ast::AstStr;
-use crate::builder::{AstBuilder, OutputBuilder};
+use crate::builder::{AstBuilder, ConstructionBuilder, OutputBuilder};
 use crate::hymeko::QueryVarParser;
 #[cfg(target_arch = "x86_64")]
 use crate::lexer::simd::{Avx2Lexer, Sse2Lexer};
@@ -105,12 +116,42 @@ pub type ParseError<'a> = lalrpop_util::ParseError<usize, Token<'a>, LexError>;
 /// Generic boundary — the compiler instantiates one optimized copy per lexer
 /// tier (scalar / SSE2 / AVX2) so the SIMD dispatch stays monomorphic.
 #[inline(always)]
-fn parse_description_inner<'a, I, B>(iter: I, builder: &mut B) -> Result<B::Output, ParseError<'a>>
+fn parse_description_inner<'a, I, B>(
+    iter: I,
+    input: &'a str,
+    builder: &mut B,
+) -> Result<B::Output, ParseError<'a>>
 where
-    I: Iterator<Item = SpannedLexItem<'a>>,
-    B: OutputBuilder<'a>,
+    I: Iterator<Item = SpannedLexItem<'a>> + lexer::common::CommonLexer<'a>,
+    B: ConstructionBuilder<'a>,
 {
-    grammar::DescriptionParser::new().parse(builder, iter)
+    let blocks = builder.fuse_literal_blocks();
+    let arcs = builder.fuse_literal_arcs();
+    if !blocks && !arcs {
+        return grammar::DescriptionParser::new().parse(builder, iter);
+    }
+    let has_arc_start = fusion::contains_arc_start(input.as_bytes());
+    let result = if blocks && !has_arc_start {
+        let scratch = fusion::Scratch::default();
+        block_grammar::DescriptionParser::new().parse(
+            builder,
+            &scratch,
+            fusion::Fuser::with_blocks(iter, false, true, &scratch),
+        )
+    } else if arcs && has_arc_start {
+        fast_grammar::DescriptionParser::new().parse(builder, fusion::ArcFuser(iter))
+    } else {
+        return grammar::DescriptionParser::new().parse(builder, iter);
+    };
+    match result {
+        Ok(output) => Ok(output),
+        Err(_) => Err(grammar::DescriptionParser::new()
+            .parse(
+                &mut builder::SyntaxValidator,
+                ScalarLexer(CoreLexer::new(input)),
+            )
+            .expect_err("token fusion preserves grammar acceptance")),
+    }
 }
 
 /// Parse a full `.hymeko` source into its AST, picking the best available
@@ -135,19 +176,30 @@ pub fn parse_description_with<'a, B: OutputBuilder<'a>>(
     input: &'a str,
     builder: &mut B,
 ) -> Result<B::Output, ParseError<'a>> {
+    parse_description_into(input, builder)
+}
+
+/// Parse the full language with consumer-owned incremental construction.
+///
+/// See [`ConstructionBuilder`] for block-entry and non-transactional callbacks.
+/// Syntax errors remain authoritative even when a consumer accumulates an error.
+pub fn parse_description_into<'a, B: ConstructionBuilder<'a>>(
+    input: &'a str,
+    builder: &mut B,
+) -> Result<B::Output, ParseError<'a>> {
     let core = CoreLexer::new(input);
 
     #[cfg(target_arch = "x86_64")]
     {
         if std::is_x86_feature_detected!("avx2") {
-            return parse_description_inner(Avx2Lexer(core), builder);
+            return parse_description_inner(Avx2Lexer(core), input, builder);
         }
         if std::is_x86_feature_detected!("sse2") {
-            return parse_description_inner(Sse2Lexer(core), builder);
+            return parse_description_inner(Sse2Lexer(core), input, builder);
         }
     }
 
-    parse_description_inner(ScalarLexer(core), builder)
+    parse_description_inner(ScalarLexer(core), input, builder)
 }
 
 // ---- Query-variable fragment ---------------------------------------------

@@ -1,11 +1,10 @@
 // src/hymeko.lalrpop
 use crate::ast::*;
-use crate::builder::{DescriptionInput, DeclarationBody, NodeInput, EdgeInput};
 use crate::lexer::Token;
 use std::borrow::Cow;
 
 
-grammar<'a, B>(builder: &mut B) where B: crate::builder::OutputBuilder<'a>;
+grammar<'a, B>(builder: &mut B) where B: crate::builder::ConstructionBuilder<'a>;
 
 extern {
     type Location = usize;
@@ -52,43 +51,47 @@ extern {
 
 pub Description: B::Output = {
     <name:Ident> <hb:OptHeaderBlock> <items:HyperItems> => {
-        builder.description(DescriptionInput { name, header: hb, items })
+        builder.finish_description(name, *hb, items)
     }
 };
 
-OptHeaderBlock: HeaderBlock<'a> = {
+// Large header types otherwise set the size of every LR stack symbol, even
+// when their rules are inlined. Keep indirection private to grammar reductions.
+OptHeaderBlock: Box<HeaderBlock<'a>> = {
     "{" <xs:HeaderStmt*> "}" => {
         let mut imports = Vec::new();
         let mut usings = Vec::new();
         let mut decls = Vec::new();
         let mut consts = Vec::new();
         for x in xs {
-            match x {
+            match *x {
                 HeaderStmt::Import(i) => imports.push(i),
                 HeaderStmt::Using(u) => usings.push(u),
                 HeaderStmt::Node(n) => decls.push(n),
                 HeaderStmt::Const(c) => consts.push(c),
             }
         }
-        (imports, usings, decls, consts)
+        Box::new((imports, usings, decls, consts))
     }
 };
-HeaderStmt: HeaderStmt<'a, &'a str> = {
-    <i:ImportStmt> => HeaderStmt::Import(i),
-    <u:UsingStmt> => HeaderStmt::Using(u),
-    <c:ConstStmt> => HeaderStmt::Const(c),
-    <n:HeaderItem> => HeaderStmt::Node(n),
+#[inline]
+HeaderStmt: Box<HeaderStmt<'a, &'a str>> = {
+    <i:ImportStmt> => Box::new(HeaderStmt::Import(i)),
+    <u:UsingStmt> => Box::new(HeaderStmt::Using(u)),
+    <c:ConstStmt> => Box::new(HeaderStmt::Const(c)),
+    <n:HeaderItem> => Box::new(HeaderStmt::Node(*n)),
 };
 
 ConstStmt: ConstDecl<&'a str> = {
     "const" <name:Ident> "=" <value:NumExpr> ";" => ConstDecl { name, value }
 };
 
-HeaderItem: NodeDecl<'a, &'a str> = {
-    <name:Ident> <anno:OptAnno> ";" => NodeDecl {
+#[inline]
+HeaderItem: Box<NodeDecl<'a, &'a str>> = {
+    <name:Ident> <anno:OptAnno> ";" => Box::new(NodeDecl {
         anno,
         inner: NodeInner { name, bases: Vec::new(), body: None }
-    }
+    })
 };
 
 ImportStmt: ImportStmt<'a, &'a str> = {
@@ -98,7 +101,7 @@ ImportStmt: ImportStmt<'a, &'a str> = {
 
 UsingStmt: UsingStmt<&'a str> = {
     "using" <path:RefPath> "as" <alias:Ident> ";" =>
-        UsingStmt { path, alias }
+        UsingStmt { path: builder.canonical_path(path), alias }
 };
 
 OptImportAlias: Option<&'a str> = {
@@ -110,12 +113,12 @@ OptImportAlias: Option<&'a str> = {
 // The AST still contains the same variants; intermediate LR symbols disappear.
 #[inline]
 HyperItem: B::Item = {
-    <n:NodeDecl>  => builder.node(n),
-    <e:EdgeDecl>  => builder.edge(e),
-    <a:HyperArc>  => builder.arc(a),
+    <n:NodeDecl>  => n,
+    <e:EdgeDecl>  => e,
+    <a:HyperArc>  => a,
 };
 
-BaseRef: SignedRef<'a, &'a str> = {
+BaseRef: B::Reference = {
     <s: SignedRef> => s,
 
     <pre:OptTags> <r:RefPath> <anno:OptAnno> => {
@@ -123,12 +126,12 @@ BaseRef: SignedRef<'a, &'a str> = {
         let mut tags = pre;
         tags.extend(anno.tags);
         anno.tags = tags;
-        SignedRef::Neutral(RefAtom { target: r, anno })
+        builder.finish_reference(0, r, anno)
 
     }
 };
 
-BaseRefs: Vec<SignedRef<'a, &'a str>> = {
+BaseRefs: Vec<B::Reference> = {
     <xs:Separated<BaseRef, ",">> ","? => xs
 };
 
@@ -154,7 +157,7 @@ Value: Value<'a, &'a str> = {
     <n:Number> => Value::Num(n),
     "-" <n:Number> => Value::Num(-n),
     "[" <xs:ValueList> "]" => Value::List(xs),
-    <r:RefPath> => Value::Ref(r),
+    <r:RefPath> => Value::Ref(builder.canonical_path(r)),
     // Parenthesised numeric expression — Tier B. Bare const refs go via
     // the RefPath arm above and are resolved at lowering time; only
     // compound expressions need the explicit parens.
@@ -221,76 +224,62 @@ ValueList: Vec<Value<'a, &'a str>> = {
 
 // Keep empty and singleton lists compact. Allocate the first pair together,
 // avoiding the immediate reallocation produced by `HyperItem*` for two items.
-HyperItems: Vec<B::Item> = {
-    => Vec::new(),
-    <item:HyperItem> => vec![item],
+HyperItems: B::Items = {
+    => builder.empty_items(),
+    <item:HyperItem> => builder.one_item(item),
     <items:HyperItemsMany> => items,
 };
 
-HyperItemsMany: Vec<B::Item> = {
-    <first:HyperItem> <second:HyperItem> => vec![first, second],
-    <mut items:HyperItemsMany> <item:HyperItem> => { items.push(item); items },
+HyperItemsMany: B::Items = {
+    <first:HyperItem> <second:HyperItem> => builder.two_items(first, second),
+    <mut items:HyperItemsMany> <item:HyperItem> => { builder.push_item(&mut items, item); items },
 };
 
-NodeDecl: NodeInput<'a, B::Item> = {
-    // Block node with base refs: name <tags>? : base0, base1 { ... }
-    <name:Ident> <anno:OptAnnoNoValue> ":" <bases:BaseRefs> "{" <body:HyperItems> "}" => NodeInput {
-        anno,
-        inner: DeclarationBody { name, bases, body: Some(body) }
+NodeBlockStart: B::Block = {
+    <name:Ident> <anno:OptAnnoNoValue> ":" <bases:BaseRefs> "{" => {
+        builder.begin_node(name, anno, bases)
     },
-    // Block node: name <tags> { ... }
-    <name:Ident> <anno:OptAnnoNoValue> "{" <body:HyperItems> "}" => NodeInput {
-        anno,
-        inner: DeclarationBody { name, bases: Vec::new(), body: Some(body) }
-    },
-
-    // Reference assignment: val_node <tags> -> a.b.c ;
-    <name:Ident> <tags:OptTags> "->" <r:RefPath> ";" => NodeInput {
-        anno: Anno { tags, value: Some(Value::Ref(r)) },
-        inner: DeclarationBody { name, bases: Vec::new(), body: None }
-    },
-
-    // Statement node: val0 <int> 56 ;
-    <name:Ident> <anno:OptAnno> ";" => NodeInput {
-        anno,
-        inner: DeclarationBody { name, bases: Vec::new(), body: None }
+    <name:Ident> <anno:OptAnnoNoValue> "{" => {
+        builder.begin_node(name, anno, Vec::new())
     },
 };
 
-// ------------------------------------------------------------
-// Edges
-// ------------------------------------------------------------
-
-// @E1 { ... }   is an edge
-EdgeDecl: EdgeInput<'a, B::Item> = {
-    <_sig:EdgeSig> <name:Ident> <anno:OptAnnoNoValue> ":" <bases:BaseRefs> "{" <body:HyperItems> "}"
-    => EdgeInput {
-        anno,
-        inner: DeclarationBody { name, bases, body }
+NodeDecl: B::Item = {
+    <start:NodeBlockStart> <body:HyperItems> "}" => {
+        builder.finish_node(start, body)
     },
-    <_sig:EdgeSig> <name:Ident> <anno:OptAnno> "{" <body:HyperItems> "}"
-    => EdgeInput {
-        anno,
-        inner: DeclarationBody { name, bases: Vec::new(), body }
-    }
+    <name:Ident> <tags:OptTags> "->" <r:RefPath> ";" => {
+        let value = Value::Ref(builder.canonical_path(r));
+        builder.finish_leaf(name, Anno { tags, value: Some(value) })
+    },
+    <name:Ident> <anno:OptAnno> ";" =>
+        builder.finish_leaf(name, anno),
 };
 
-EdgeSig: () = {
-    "@" => (),
+EdgeBlockStart: B::Block = {
+    "@" <name:Ident> <anno:OptAnnoNoValue> ":" <bases:BaseRefs> "{" => {
+        builder.begin_edge(name, anno, bases)
+    },
+    "@" <name:Ident> <anno:OptAnno> "{" => {
+        builder.begin_edge(name, anno, Vec::new())
+    },
+};
+
+EdgeDecl: B::Item = {
+    <start:EdgeBlockStart> <body:HyperItems> "}" => {
+        builder.finish_edge(start, body)
+    },
 };
 
 // ------------------------------------------------------------
 // Arcs inside blocks/edges: +A -B ;
 // ------------------------------------------------------------
 
-HyperArc: HyperArc<'a, &'a str> = {
-    "(" <refs:SignedRefList> ")" <anno:OptAnno> ";" => HyperArc {
-        anno,
-        inner: ArcInner { refs }
-    }
+HyperArc: B::Item = {
+    "(" <refs:SignedRefList> ")" <anno:OptAnno> ";" => builder.finish_arc(anno, refs)
 };
 
-SignedRefList: Vec<SignedRef<'a, &'a str>> = {
+SignedRefList: Vec<B::Reference> = {
     <xs:Separated<SignedRef, ",">> ","? => xs
 };
 
@@ -299,32 +288,35 @@ SignedRefList: Vec<SignedRef<'a, &'a str>> = {
 // ------------------------------------------------------------
 
 #[inline]
-RefPath: Ref<&'a str> = {
-    <path:Separated<Ident, ".">> => Ref { path }
+RefPath: B::Path = { <path:PathParts> => path };
+
+PathParts: B::Path = {
+    <name:Ident> => builder.path(name),
+    <mut path:PathParts> "." <name:Ident> => { builder.path_push(&mut path, name); path },
 };
 
 
-SignedRef: SignedRef<'a, &'a str> = {
+SignedRef: B::Reference = {
     "+" <pre:OptTags> <r:RefPath> <anno:OptAnno> => {
         let mut anno = anno;
         let mut tags = pre;
         tags.extend(anno.tags);
         anno.tags = tags;
-        SignedRef::Plus(RefAtom { target: r, anno })
+        builder.finish_reference(1, r, anno)
     },
     "-" <pre:OptTags> <r:RefPath> <anno:OptAnno> => {
         let mut anno = anno;
         let mut tags = pre;
         tags.extend(anno.tags);
         anno.tags = tags;
-        SignedRef::Minus(RefAtom { target: r, anno })
+        builder.finish_reference(-1, r, anno)
     },
     "~" <pre:OptTags> <r:RefPath> <anno:OptAnno> => {
         let mut anno = anno;
         let mut tags = pre;
         tags.extend(anno.tags);
         anno.tags = tags;
-        SignedRef::Neutral(RefAtom { target: r, anno })
+        builder.finish_reference(0, r, anno)
     },
 };
 // ------------------------------------------------------------
